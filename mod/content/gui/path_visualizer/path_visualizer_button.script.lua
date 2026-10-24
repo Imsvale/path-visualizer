@@ -36,11 +36,13 @@ local function swatch(color)
 	}
 end
 
--- A checkbox with the colour it has in the overlay.
+-- A checkbox with the colour it has in the overlay, in front of it (placed after it, the
+-- swatch didn't show: the checkbox probably takes the row's width).
 local function settingRow(label, state, color, set)
 	return builtin.BoxLayout{
 		orientation = builtin.type.Orientation.Horizontal,
 		children = {
+			swatch(color),
 			builtin.CheckBox{
 				label = label,
 				value = state:old(),
@@ -49,7 +51,6 @@ local function settingRow(label, state, color, set)
 					set(value == 1)
 				end,
 			},
-			swatch(color),
 		},
 	}
 end

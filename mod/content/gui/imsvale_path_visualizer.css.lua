@@ -24,7 +24,7 @@ function data()
 	a("Component!imsvale-pathvis-swatch", {
 		size = { 18, 4 },
 		gravity = { 0.5, 0.5 },
-		margin = { 0, 0, 0, 8 },
+		margin = { 0, 8, 0, 0 },
 		backgroundImage1 = { fileName = "::/gui/menu/design/allwhite_main.tga" },
 	})
 
