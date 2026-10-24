@@ -209,6 +209,10 @@ local function entityEdges(entity)
 			end)
 			list[i] = { geometry = lane.geometry, nodes = nodes }
 		end
+		-- The geometries point into the component's data: keep the component and its edge list
+		-- alive with them. Cached without them, a geometry outlived its component and
+		-- calcPosition on it failed an engine assertion (edge_geometry_util.cpp, 2026-10-24).
+		list.tn, list.edges = tn, edges
 		cached = list
 	end)
 	state.edgeCache[entity] = cached
