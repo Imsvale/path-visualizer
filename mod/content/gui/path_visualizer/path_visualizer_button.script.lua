@@ -26,14 +26,12 @@ local function windowApi()
 	return wc
 end
 
--- A short bar in an overlay colour, beside its setting.
+-- A short bar in an overlay colour, beside its setting (image and size: the stylesheet).
 local function swatch(color)
 	return builtin.Component{
 		meta = {
-			styleSheet = styleutil.makeStyle{
-				backgroundColor1 = { color[1], color[2], color[3], 1.0 },
-				size = { 18, 4 },
-			},
+			class = "imsvale-pathvis-swatch",
+			styleSheet = styleutil.makeStyle{ backgroundColor1 = { color[1], color[2], color[3], 1.0 } },
 		},
 	}
 end
