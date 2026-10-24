@@ -79,6 +79,7 @@ local state = {
 	sectionInfo = {}, -- dev log: train -> the next section's verdict
 	edgeCache = {}, -- track entity -> its edges (entityEdges)
 	signalCache = {}, -- edge and direction -> whether a signal faces that way (hasSignal)
+	lineCache = {}, -- edge and style -> its line piece; edge .. "outline" -> its outline pieces
 	cacheSince = nil, -- clock() when the caches were last cleared
 	cacheDirtyUntil = nil, -- clock() until which they're cleared on every build (after a build)
 	timing = { polls = 0, builds = 0, total = 0, max = 0, since = nil }, -- dev timing log
@@ -370,18 +371,37 @@ local function buildStatic()
 	if signature == state.signature then return false end
 	state.signature = signature
 
+	-- A track edge's line pieces depend only on its geometry, colour and width: built once and
+	-- reused (state.lineCache, cleared with the network caches). A rebuild then only picks the
+	-- pieces from the train's front edge to the end of its reservation.
+	local cache = state.lineCache
 	local lines = {}
 	for _, t in ipairs(trains) do
 		local color = t.waiting and COLOR_WAITING or COLOR_PATH
 		local width = t.selected and WIDTH_SELECTED or WIDTH
+		local style = (t.waiting and "w" or "p") .. (t.selected and "s" or "n")
 		local last
 		for _, id in ipairs(t.ids) do
 			if #lines >= MAX_EDGES then break end
 			local g = geometryOf(networks, id)
 			-- (a zero-length edge crashed the game drawing it, parallelism)
 			if g and g.length >= 0.1 then
-				lines[#lines + 1] = makeEdge(g, color, width)
-				if t.selected then addOutline(lines, g, (width + OUTLINE_WIDTH) / 2) end
+				local key = edgeKey(id)
+				local line = cache[key .. style]
+				if not line then
+					line = makeEdge(g, color, width)
+					cache[key .. style] = line
+				end
+				lines[#lines + 1] = line
+				if t.selected then
+					local outline = cache[key .. "outline"]
+					if not outline then
+						outline = {}
+						addOutline(outline, g, (WIDTH_SELECTED + OUTLINE_WIDTH) / 2)
+						cache[key .. "outline"] = outline
+					end
+					for _, e in ipairs(outline) do lines[#lines + 1] = e end
+				end
 			end
 			last = g or last
 		end
@@ -624,7 +644,7 @@ function overlay.poll()
 		-- script, which may not fire the event (e.g. Parallelism's extra tracks)
 		local c = clock()
 		if c and (not state.cacheSince or c - state.cacheSince > 300 or (state.cacheDirtyUntil and c < state.cacheDirtyUntil)) then
-			state.edgeCache, state.signalCache, state.cacheSince = {}, {}, c
+			state.edgeCache, state.signalCache, state.lineCache, state.cacheSince = {}, {}, {}, c
 		end
 		built = true
 		local staticChanged = buildStatic()
