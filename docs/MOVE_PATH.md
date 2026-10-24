@@ -54,7 +54,8 @@ reservedFrom, reservedTo, occupiedBackIndex, occupiedFrontIndex
 
 ## Position
 
-- `dyn.pathPos.edgeIndex` / `pos` (metres into the edge) / `pos01` (fraction). Lies between `occupiedBackIndex` and `occupiedFrontIndex`, so it's not the train's front. Confirmed.
+- `dyn.pathPos.edgeIndex` / `pos` (metres into the edge) / `pos01` (fraction): the middle of the train. Confirmed 2026-10-24 (drawn in the overlay, user). `carriageListSystem.getVehicleData(train)` gives `length` and `bounds.front` / `bounds.back`, the nose and tail relative to it (train 1328: length 130.69, bounds +65.345 / -65.345), and `brakeDeceleration` (2.5).
+- `pathPos` changes once per game time step (0.2 s); the overlay extrapolates its bars in between.
 - `occupiedBackIndex` .. `occupiedFrontIndex`: edges the train covers, both inclusive (front went from 42 to 43 as the train's front passed signal 850 at the start of edge 43). Consistent so far.
 
 ## blocked
