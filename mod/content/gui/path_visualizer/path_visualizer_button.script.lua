@@ -9,6 +9,7 @@ local react = ug_require "::/gui/main/react.lua"
 local builtin = ug_require "::/gui/main/builtin.lua"
 local main_mod_button_area = ug_require "::/gui/main/main_mod_button_area.tl"
 local popover_react_util = ug_require "::/gui/main/popover_react_util.tl"
+local styleutil = ug_require "::/gui/main/styleutil.tl"
 local overlay = ug_require "imsvale_path_visualizer::/gui/path_visualizer/path_visualizer_overlay.lua"
 
 local function log(msg)
@@ -25,28 +26,44 @@ local function windowApi()
 	return wc
 end
 
+-- A short bar in an overlay colour, beside its setting.
+local function swatch(color)
+	return builtin.Component{
+		meta = {
+			styleSheet = styleutil.makeStyle{
+				backgroundColor1 = { color[1], color[2], color[3], 1.0 },
+				size = { 18, 4 },
+			},
+		},
+	}
+end
+
+-- A checkbox with the colour it has in the overlay.
+local function settingRow(label, state, color, set)
+	return builtin.BoxLayout{
+		orientation = builtin.type.Orientation.Horizontal,
+		children = {
+			builtin.CheckBox{
+				label = label,
+				value = state:old(),
+				onValueChange = function(value)
+					state:set(value)
+					set(value == 1)
+				end,
+			},
+			swatch(color),
+		},
+	}
+end
+
 local Settings = react.RegisterRecipe("ImsvalePathVisualizerSettings", function()
 	local braking = react.useState(overlay.isBraking() and 1 or 0)
 	local emergency = react.useState(overlay.isEmergency() and 1 or 0)
 	return builtin.BoxLayout{
 		orientation = builtin.type.Orientation.Vertical,
 		children = {
-			builtin.CheckBox{
-				label = _("Braking point"),
-				value = braking:old(),
-				onValueChange = function(value)
-					braking:set(value)
-					overlay.setBraking(value == 1)
-				end,
-			},
-			builtin.CheckBox{
-				label = _("Emergency stop"),
-				value = emergency:old(),
-				onValueChange = function(value)
-					emergency:set(value)
-					overlay.setEmergency(value == 1)
-				end,
-			},
+			settingRow(_("Braking point"), braking, overlay.colors.braking, overlay.setBraking),
+			settingRow(_("Emergency stop"), emergency, overlay.colors.emergency, overlay.setEmergency),
 		},
 	}
 end)

@@ -35,6 +35,11 @@ local COLOR_PATH_END = { 1.0, 1.0, 1.0, 1.0 }
 local COLOR_BRAKING = { 1.0, 0.9, 0.1, 1.0 }
 local COLOR_PATHPOS = { 1.0, 0.2, 1.0, 1.0 }
 local COLOR_EMERGENCY = { 0.6, 0.45, 1.0, 1.0 }
+local COLOR_OUTLINE = { 1.0, 1.0, 1.0, 0.9 }
+local OUTLINE_WIDTH = 0.15
+
+-- for the settings popover's colour swatches
+overlay.colors = { braking = COLOR_BRAKING, emergency = COLOR_EMERGENCY }
 
 -- A manual stop braked at three times the train's brake deceleration (docs/MOVE_PATH.md,
 -- one observation; no setting for it found).
@@ -113,6 +118,32 @@ local function addBar(lines, g, t, color, width)
 	if len < 1e-6 then return end
 	local nx, ny = -dy / len * BAR, dx / len * BAR
 	lines[#lines + 1] = makeEdge(straightGeometry(p.x + nx, p.y + ny, p.x - nx, p.y - ny, p.z), color, width)
+end
+
+-- Thin lines along both sides of geometry g, `h` metres out (EdgeRenderable has no lateral
+-- offset): g sampled about every 4 m, the samples shifted sideways, joined by straight edges.
+local function addOutline(lines, g, h)
+	local n = math.max(2, math.ceil(g.length / 4))
+	local pts = {}
+	for k = 0, n do pts[k] = calc(g, k / n) end
+	for _, side in ipairs({ 1, -1 }) do
+		local prev
+		for k = 0, n do
+			local a, b = pts[math.max(0, k - 1)], pts[math.min(n, k + 1)]
+			local dx, dy = b.x - a.x, b.y - a.y
+			local len = math.sqrt(dx * dx + dy * dy)
+			if len > 1e-6 then
+				local p = pts[k]
+				local q = { x = p.x - dy / len * h * side, y = p.y + dx / len * h * side, z = p.z }
+				if prev and (q.x - prev.x) ^ 2 + (q.y - prev.y) ^ 2 >= 0.01 then
+					lines[#lines + 1] = makeEdge(straightGeometry(prev.x, prev.y, q.x, q.y, (prev.z + q.z) / 2), COLOR_OUTLINE, OUTLINE_WIDTH)
+					prev = q
+				elseif not prev then
+					prev = q
+				end
+			end
+		end
+	end
 end
 
 -- Whether the train runs along geometry g from t = 0 to t = 1: its t = 1 end is the one
@@ -205,7 +236,6 @@ local function buildStatic()
 	for _, t in ipairs(trains) do
 		local color = t.waiting and COLOR_WAITING or COLOR_PATH
 		local width = t.selected and WIDTH_SELECTED or WIDTH
-		if t.selected then color = { color[1], color[2], color[3], 1.0 } end
 		local last
 		for _, id in ipairs(t.ids) do
 			if #lines >= MAX_EDGES then break end
@@ -213,6 +243,7 @@ local function buildStatic()
 			-- (a zero-length edge crashed the game drawing it, parallelism)
 			if g and g.length >= 0.1 then
 				lines[#lines + 1] = makeEdge(g, color, width)
+				if t.selected then addOutline(lines, g, (width + OUTLINE_WIDTH) / 2) end
 			end
 			last = g or last
 		end
