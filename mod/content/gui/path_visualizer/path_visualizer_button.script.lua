@@ -88,11 +88,12 @@ local Button = react.RegisterPluginRecipe(main_mod_button_area.MainModButtonArea
 			if popoverOpen then
 				closeSettings()
 			else
-				-- below the button's lower left corner
+				-- right under the button: its top left corner plus its height
 				local pos = { x = 0, y = 0 }
 				pcall(function()
-					local p = selfRef:get():getPosition(0.0, 1.0)
-					pos = { x = p.x, y = p.y + 4 }
+					local p = selfRef:get():getPosition(0.0, 0.0)
+					local size = api.gui.byId.getSize("imsvale_path_visualizer.button")
+					pos = { x = p.x, y = p.y + size.y }
 				end)
 				openSettings(pos)
 			end

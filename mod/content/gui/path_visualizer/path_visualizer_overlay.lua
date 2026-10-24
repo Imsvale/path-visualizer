@@ -267,32 +267,37 @@ local function pathPoint(mp, networks, i, rem)
 	return g, t
 end
 
--- Distance and speed after `dt` seconds from speed v at acceleration a, not going backwards
--- (a braking train stops). A train standing still stays put: standing at a platform its
--- acceleration reads +1.53 the whole stop (2026-10-24), which made the bars creep and snap
--- back every step.
-local function advance(v, a, dt)
-	if v <= 0 then return 0, 0 end
-	if a < 0 and v + a * dt <= 0 then
-		return v * v / (-2 * a), 0
+-- Metres along the path from (i0, p0) to (i1, p1), positions as edge index and metres into it.
+local function pathDistance(mp, networks, i0, p0, i1, p1)
+	if i1 < i0 then return -pathDistance(mp, networks, i1, p1, i0, p0) end
+	local d = p1 - p0
+	for i = i0, i1 - 1 do
+		local g = geometryOf(networks, mp.path.edges[i + 1].edgeId)
+		d = d + (g and g.length or 0)
 	end
-	return v * dt + a * dt * dt / 2, v + a * dt
+	return d
 end
 
 -- For each selected train: a bar at its pathPos, and, if switched on, where it would stop
 -- if it started braking now (v² / 2a ahead of its front), normally and in an emergency stop.
--- All moved on by `elapsed` seconds of game time since the last step, at the train's speed
--- and acceleration, so they move smoothly in between.
-local function buildBraking(elapsed)
+-- `fraction` (0..1) of the way from the previous step (dyn0) to the current one (dyn): the
+-- game draws a train between the two (taken to be so: drawing at dyn, or pushing on past it,
+-- put the bars ahead of the train), so the bars move with it.
+local function buildBraking(fraction)
 	local lines = {}
 	for train in pairs(state.selected) do
 		pcall(function()
 			local mp = api.engine.getComponent(train, api.type.ComponentType.MOVE_PATH)
-			local pp = mp.dyn.pathPos
-			local moved, v = advance(mp.dyn.speed, mp.dyn.accel or 0, elapsed)
-			local pos = pp.pos + moved
 			local networks = {}
-			local g, t = pathPoint(mp, networks, pp.edgeIndex, pos)
+			local pp, pp0 = mp.dyn.pathPos, mp.dyn0.pathPos
+			local edge, pos = pp.edgeIndex, pp.pos
+			local v = mp.dyn.speed
+			if fraction < 1 and pp0.edgeIndex <= pp.edgeIndex then
+				edge = pp0.edgeIndex
+				pos = pp0.pos + fraction * pathDistance(mp, networks, pp0.edgeIndex, pp0.pos, pp.edgeIndex, pp.pos)
+				v = mp.dyn0.speed + fraction * (mp.dyn.speed - mp.dyn0.speed)
+			end
+			local g, t = pathPoint(mp, networks, edge, pos)
 			if g then addBar(lines, g, t, COLOR_PATHPOS, BAR_WIDTH) end
 			if not state.braking and not state.emergency then return end
 			local d = vehicleData(train)
@@ -304,11 +309,11 @@ local function buildBraking(elapsed)
 			-- brakeDeceleration of 2.5: with the nominal value the point lands a little long)
 			local brake = (mp.dyn.brakeDecel or 0) > 0 and mp.dyn.brakeDecel or d.brake
 			if state.braking then
-				g, t = pathPoint(mp, networks, pp.edgeIndex, pos + d.front + v * v / (2 * brake))
+				g, t = pathPoint(mp, networks, edge, pos + d.front + v * v / (2 * brake))
 				if g then addBar(lines, g, t, COLOR_BRAKING, BAR_WIDTH) end
 			end
 			if state.emergency then
-				g, t = pathPoint(mp, networks, pp.edgeIndex, pos + d.front + v * v / (2 * d.brake * EMERGENCY_FACTOR))
+				g, t = pathPoint(mp, networks, edge, pos + d.front + v * v / (2 * d.brake * EMERGENCY_FACTOR))
 				if g then addBar(lines, g, t, COLOR_EMERGENCY, BAR_WIDTH) end
 			end
 		end)
@@ -375,12 +380,14 @@ local function clock()
 	return ok and c or nil
 end
 
--- Seconds of game time since the last step, from the real clock and how fast game time ran
--- over the last step (game speed); at most one step, so nothing runs on while paused.
-local function sinceStep()
+-- How far into the current step we are (0..1), from the real clock and how fast game time
+-- ran over the last step (game speed); 1 once a step's worth has passed (and while paused).
+local function stepFraction()
 	local c = clock()
-	if not c or not state.stepClock or not state.gameRate then return 0 end
-	return math.min((c - state.stepClock) * state.gameRate, state.stepLength or 0)
+	if not c or not state.stepClock or not state.gameRate or not state.stepLength or state.stepLength <= 0 then
+		return 1
+	end
+	return math.min((c - state.stepClock) * state.gameRate / state.stepLength, 1)
 end
 
 local function noteStep(now)
@@ -400,7 +407,7 @@ function overlay.poll()
 		local selectionChanged = updateSelection()
 		local now = gameTime()
 		if now == state.time and not selectionChanged then
-			if next(state.selected) ~= nil then publish(buildBraking(sinceStep())) end
+			if next(state.selected) ~= nil then publish(buildBraking(stepFraction())) end
 			return
 		end
 		if now ~= state.time then
