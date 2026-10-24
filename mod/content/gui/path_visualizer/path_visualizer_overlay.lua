@@ -77,6 +77,9 @@ local state = {
 	failed = false,
 	logged = {},
 	sectionInfo = {}, -- dev log: train -> the next section's verdict
+	edgeCache = {}, -- track entity -> its edges (entityEdges)
+	signalCache = {}, -- edge and direction -> whether a signal faces that way (hasSignal)
+	cacheSince = nil, -- clock() when the caches were last cleared
 	timing = { polls = 0, builds = 0, total = 0, max = 0, since = nil }, -- dev timing log
 }
 
@@ -180,48 +183,71 @@ local function forward(prev, g, next)
 	return true
 end
 
--- Geometry of a path edge (EdgeId), with the TRANSPORT_NETWORK components cached in networks.
-local function geometryOf(networks, id)
-	if not id then return nil end
-	local tn = networks[id.entity]
-	if tn == nil then
-		tn = api.engine.getComponent(id.entity, api.type.ComponentType.TRANSPORT_NETWORK) or false
-		networks[id.entity] = tn
+local function edgeKey(id) return id.entity .. ":" .. id.index end
+local function nodeKey(id) return id.entity .. ":" .. id.index end
+
+-- Every edge of a track entity's TRANSPORT_NETWORK, read once and cached: { geometry, nodes =
+-- the node keys of its two ends (Edge.conns) }, by edge index + 1; false if none. Reading
+-- tn.edges per edge was most of the overlay's time (copying a station's whole edge list for
+-- each of its edges, 2026-10-24). The network rarely changes: overlay.poll clears the cache
+-- every minute, so new and removed track is picked up.
+local function entityEdges(entity)
+	local cached = state.edgeCache[entity]
+	if cached ~= nil then return cached end
+	cached = false
+	pcall(function()
+		local tn = api.engine.getComponent(entity, api.type.ComponentType.TRANSPORT_NETWORK)
+		if not tn then return end
+		local list, edges = {}, tn.edges
+		for i = 1, #edges do
+			local lane = edges[i]
+			local nodes = {}
+			-- (if the nodes can't be read, only the node check is lost)
+			pcall(function()
+				for _, node in ipairs(lane.conns) do nodes[#nodes + 1] = nodeKey(node) end
+			end)
+			list[i] = { geometry = lane.geometry, nodes = nodes }
+		end
+		cached = list
+	end)
+	state.edgeCache[entity] = cached
+	return cached
+end
+
+local function edgeData(id)
+	local list = id and entityEdges(id.entity)
+	return list and list[id.index + 1]
+end
+
+-- Geometry of a path edge (EdgeId). (`networks` is no longer used: the cache is session-wide.)
+local function geometryOf(_networks, id)
+	local e = edgeData(id)
+	return e and e.geometry
+end
+
+-- The node keys of a track edge's two ends; empty if they can't be read.
+local function nodesOf(_networks, id)
+	local e = edgeData(id)
+	return e and e.nodes or {}
+end
+
+-- Whether a signal on the edge faces a train running along it in direction dir; cached like
+-- the edges.
+local function hasSignal(id, dir)
+	local key = edgeKey(id) .. (dir and "+" or "-")
+	local cached = state.signalCache[key]
+	if cached == nil then
+		local sid = api.engine.system.signalSystem.getSignal(id, dir)
+		cached = (sid and sid.entity >= 0) and true or false
+		state.signalCache[key] = cached
 	end
-	local lane = tn and tn.edges[id.index + 1]
-	return lane and lane.geometry
+	return cached
 end
 
 local function isSelected(train)
 	local visible = false
 	pcall(function() visible = api.gui.byId.isVisible("temp.view.entity_" .. tostring(train)) end)
 	return visible
-end
-
-local function edgeKey(id) return id.entity .. ":" .. id.index end
-local function nodeKey(id) return id.entity .. ":" .. id.index end
-
--- The track edge behind an EdgeId (its conns are its two nodes), with the TRANSPORT_NETWORK
--- components cached in networks.
-local function laneOf(networks, id)
-	local tn = networks[id.entity]
-	if tn == nil then
-		tn = api.engine.getComponent(id.entity, api.type.ComponentType.TRANSPORT_NETWORK) or false
-		networks[id.entity] = tn
-	end
-	return tn and tn.edges[id.index + 1]
-end
-
--- The node keys of a track edge's two ends (Edge.conns), or none if they can't be read (so
--- that only the node check is lost, not the overlay).
-local function nodesOf(networks, id)
-	local keys = {}
-	pcall(function()
-		local lane = laneOf(networks, id)
-		if not lane then return end
-		for _, node in ipairs(lane.conns) do keys[#keys + 1] = nodeKey(node) end
-	end)
-	return keys
 end
 
 -- One train's reservation, or nil: the edges it holds, the ones ahead of its front (drawn),
@@ -242,10 +268,7 @@ local function readTrain(train)
 	local section = {}
 	for i = to, n - 1 do
 		local e = edges[i + 1]
-		if i > to then
-			local sid = api.engine.system.signalSystem.getSignal(e.edgeId, e.dir)
-			if sid and sid.entity >= 0 then break end
-		end
+		if i > to and hasSignal(e.edgeId, e.dir) then break end
 		section[#section + 1] = e.edgeId
 	end
 	local selected = state.selected[train] == true
@@ -591,6 +614,11 @@ function overlay.poll()
 		end
 		state.time = now
 		if selectionChanged then state.signature = nil end
+		-- the network caches, cleared every minute (new and removed track, signals)
+		local c = clock()
+		if c and (not state.cacheSince or c - state.cacheSince > 60) then
+			state.edgeCache, state.signalCache, state.cacheSince = {}, {}, c
+		end
 		built = true
 		local staticChanged = buildStatic()
 		local braking = buildBraking(0)
