@@ -2,6 +2,10 @@
 -- (reservedTo), its path or its waiting-for-free-path flag changes. reservedFrom alone isn't logged: it
 -- follows the train's rear edge by edge. Findings so far: docs/MOVE_PATH.md.
 
+-- dev switch reservationLog (scripts/path_visualizer_dev.lua): off in a release
+local devOk, dev = pcall(ug_require, "/scripts/path_visualizer_dev.lua")
+local ENABLED = devOk and type(dev) == "table" and dev.reservationLog == true
+
 local function log(fmt, ...)
 	local args = { ... }
 	pcall(function() print("[pathvis] " .. string.format(fmt, (table.unpack or unpack)(args))) end)
@@ -97,6 +101,7 @@ end
 
 -- GUI state: state is read-only here; guiState is per session (not saved).
 local function guiUpdate(_userParams, _state, guiState)
+	if not ENABLED then return end
 	local gs = guiState:get() or {}
 	local now = gameTime()
 	if not now or now == gs.lastTime then return end -- paused

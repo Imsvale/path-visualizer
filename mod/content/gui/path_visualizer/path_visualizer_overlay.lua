@@ -3,9 +3,10 @@
 -- From each train's MOVE_PATH (docs/MOVE_PATH.md): the reservation is path.edges
 -- [reservedFrom, reservedTo), released behind the train edge by edge; drawn from the train's
 -- front edge on. Line colour: whether the train is waiting for a free path (it failed to
--- extend its reservation). End bar: red or green for the signal facing the train at the
--- end, white for the end of the path. Selected trains (an open entity window) get wider
--- lines and, if switched on, a yellow bar where they would stop braking now.
+-- extend its reservation). End bar: red where the reservation is held short of the path's
+-- end (at a signal, or by another train), white at the end of the path. Selected trains (an
+-- open entity window) get wider lines with a white outline and, if switched on, bars where
+-- they would stop braking now (normally and in an emergency stop).
 --
 -- A 3D overlay only renders inside the active action's ActionDescriptor (network-wireframe,
 -- parallelism), so path_visualizer_replace.script.lua puts these lines into every
@@ -30,7 +31,6 @@ local function v4(c) return api.type.Vec4f.new(c[1], c[2], c[3], c[4]) end
 local COLOR_PATH = { 0.2, 0.85, 1.0, 0.75 }
 local COLOR_WAITING = { 1.0, 0.6, 0.1, 0.75 }
 local COLOR_RED = { 1.0, 0.15, 0.15, 1.0 }
-local COLOR_GREEN = { 0.2, 1.0, 0.3, 1.0 }
 local COLOR_PATH_END = { 1.0, 1.0, 1.0, 1.0 }
 local COLOR_BRAKING = { 1.0, 0.9, 0.1, 1.0 }
 local COLOR_PATHPOS = { 1.0, 0.2, 1.0, 1.0 }
@@ -45,8 +45,11 @@ overlay.colors = { braking = COLOR_BRAKING, emergency = COLOR_EMERGENCY }
 -- one observation; no setting for it found).
 local EMERGENCY_FACTOR = 3
 
--- dev: log each selected train's MOVE_PATH dynamics once per game time step
-local LOG_SELECTED = true
+-- dev switches (scripts/path_visualizer_dev.lua): off in a release
+local devOk, dev = pcall(ug_require, "imsvale_path_visualizer::/scripts/path_visualizer_dev.lua")
+if not devOk or type(dev) ~= "table" then dev = {} end
+local LOG_SELECTED = dev.logSelected == true -- selected trains' dynamics, a log line per step
+local PATHPOS_MARKER = dev.pathPosMarker == true -- a bar at selected trains' pathPos
 
 local state = {
 	-- settings, per session: the HUD button (path_visualizer_button.script.lua) and its popover
@@ -192,18 +195,13 @@ local function readTrain(train)
 	for i = from, to - 1 do
 		ids[#ids + 1] = mp.path.edges[i + 1].edgeId
 	end
-	-- the edge after the end, to find where the end is; and its signal facing the train
+	-- the edge after the end, to find where the end is. A reservation ending short of the path's
+	-- end is held (at a signal, or by another train's reservation): never at a green signal, as
+	-- a signal only turns green once a reservation runs past it.
 	local nextId, endKind = nil, "end"
 	if to < n then
-		local e = mp.path.edges[to + 1]
-		nextId = e.edgeId
-		endKind = "none"
-		local sid = api.engine.system.signalSystem.getSignal(e.edgeId, e.dir)
-		if sid and sid.entity >= 0 then
-			local list = api.engine.getComponent(sid.entity, api.type.ComponentType.SIGNAL_LIST)
-			local s = list and list.signals[sid.index + 1]
-			endKind = s and s.state == 1 and "green" or "red"
-		end
+		nextId = mp.path.edges[to + 1].edgeId
+		endKind = "held"
 	end
 	local selected = state.selected[train] == true
 	return {
@@ -250,7 +248,7 @@ local function buildStatic()
 		if last and #lines < MAX_EDGES then
 			local prev = #t.ids > 1 and geometryOf(networks, t.ids[#t.ids - 1]) or geometryOf(networks, t.prevId)
 			local fw = forward(prev, last, geometryOf(networks, t.nextId))
-			local endColor = t.endKind == "green" and COLOR_GREEN or t.endKind == "end" and COLOR_PATH_END or COLOR_RED
+			local endColor = t.endKind == "end" and COLOR_PATH_END or COLOR_RED
 			addBar(lines, last, fw and 1 or 0, endColor, BAR_WIDTH)
 		end
 	end
@@ -328,8 +326,11 @@ local function buildBraking(fraction)
 				pos = pp0.pos + fraction * pathDistance(mp, networks, pp0.edgeIndex, pp0.pos, pp.edgeIndex, pp.pos)
 				v = mp.dyn0.speed + fraction * (mp.dyn.speed - mp.dyn0.speed)
 			end
-			local g, t = pathPoint(mp, networks, edge, pos)
-			if g then addBar(lines, g, t, COLOR_PATHPOS, BAR_WIDTH) end
+			local g, t
+			if PATHPOS_MARKER then
+				g, t = pathPoint(mp, networks, edge, pos)
+				if g then addBar(lines, g, t, COLOR_PATHPOS, BAR_WIDTH) end
+			end
 			if not state.braking and not state.emergency then return end
 			local d = vehicleData(train)
 			if not d then
