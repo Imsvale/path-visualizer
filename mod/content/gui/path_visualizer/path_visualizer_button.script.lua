@@ -66,8 +66,8 @@ local SettingsContent = react.RegisterRecipe("ImsvalePathVisualizerSettingsConte
 	return builtin.BoxLayout{
 		orientation = builtin.type.Orientation.Vertical,
 		children = {
-			settingRow(_("Braking point"), overlay.isBraking(), overlay.colors.braking, overlay.setBraking),
-			settingRow(_("Emergency stop"), overlay.isEmergency(), overlay.colors.emergency, overlay.setEmergency),
+			settingRow(_("Braking distance"), overlay.isBraking(), overlay.colors.braking, overlay.setBraking),
+			settingRow(_("Manual stop"), overlay.isEmergency(), overlay.colors.emergency, overlay.setEmergency),
 		},
 	}
 end)

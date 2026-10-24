@@ -8,10 +8,15 @@
 -- second one. Children are built before their descriptor, so a flag set by the
 -- EdgeRenderable wrapper tells the next descriptor.
 --
--- react.CallOriginalRecipe() refuses builtins, so the originals come from
--- _react.originalRecipeFn (as in network-wireframe). Another mod wrapping the same builtins
--- the same way (network-wireframe does ActionDescriptor) would replace one wrapper with the
--- other.
+-- Chained, not replacing: each wrapper calls what was in the recipe's replacement slot when
+-- it was installed (_react.recipeReplace[id], another mod's wrapper), and only where that's
+-- empty the game's original (_react.originalRecipeFn[id]). Calling the original directly (as
+-- react.CallOriginalRecipe does) would drop a wrapper installed before ours. See
+-- ../docs/GUI.md, "Replacing recipes".
+-- Installed early (order -1000 in the .res.lua), so ours is the innermost wrapper: a mod
+-- chaining onto it runs first, and an EdgeRenderable it adds passes through our
+-- EdgeRenderable wrapper before our descriptor wrapper decides, so there's never a second one.
+-- Were ours outer, it would add its own before an inner wrapper added another: a crash.
 
 local react = ug_require "::/gui/main/react.lua"
 local builtin = ug_require "::/gui/main/builtin.lua"
@@ -64,19 +69,24 @@ end
 
 local function doReplace(replacementApi)
 	local ok, internal = pcall(function() return _react end)
-	local originals = ok and internal and internal.originalRecipeFn
-	local adId, erId = react.GetRecipeId(builtin.ActionDescriptor), react.GetRecipeId(builtin.EdgeRenderable)
-	local originalAD = originals and adId and originals[adId]
-	local originalER = originals and erId and originals[erId]
-	if not originalAD or not originalER then
-		log("ActionDescriptor or EdgeRenderable original not reachable: overlay off")
+	if not ok or type(internal) ~= "table" then internal = {} end
+	-- what each recipe calls through to: the wrapper already installed, else the original
+	local function previous(recipe)
+		local id = react.GetRecipeId(recipe)
+		if not id then return nil end
+		return (internal.recipeReplace and internal.recipeReplace[id])
+			or (internal.originalRecipeFn and internal.originalRecipeFn[id])
+	end
+	local previousAD, previousER = previous(builtin.ActionDescriptor), previous(builtin.EdgeRenderable)
+	if not previousAD or not previousER then
+		log("ActionDescriptor or EdgeRenderable not reachable: overlay off")
 		return
 	end
 
 	local erBuilt = false -- an EdgeRenderable was built since the last descriptor
 	local ownER = false -- building our own: leave it alone
 
-	replacementApi.ReplaceRecipe(builtin.EdgeRenderable, wrapParams(originalER, function(params)
+	replacementApi.ReplaceRecipe(builtin.EdgeRenderable, wrapParams(previousER, function(params)
 		if ownER or not isParams(params) then return params end
 		erBuilt = true
 		local lines = overlay.lines()
@@ -91,7 +101,7 @@ local function doReplace(replacementApi)
 		return ok2 and merged or params
 	end))
 
-	replacementApi.ReplaceRecipe(builtin.ActionDescriptor, wrapParams(originalAD, function(params)
+	replacementApi.ReplaceRecipe(builtin.ActionDescriptor, wrapParams(previousAD, function(params)
 		if not isParams(params) then return params end
 		local hadER = erBuilt
 		erBuilt = false
