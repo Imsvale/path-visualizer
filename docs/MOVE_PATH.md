@@ -19,6 +19,14 @@ reservedFrom, reservedTo, occupiedBackIndex, occupiedFrontIndex
   - Signal turned green, train starting off: reserved 40..83, i.e. through the last edge of the path (the far end of the destination station's track pieces). Signal 551 on the way, facing the other direction, didn't limit it.
 - Released behind the train edge by edge: `reservedFrom` equalled `occupiedBackIndex` in every sample (10 samples over a whole leg, station stop and departure). Confirmed.
 - Extended signal to signal: leaving the terminal on a fresh path (86 edges), train 543 reserved 0..29, up to the first signal facing it (551 on edge 29). Approaching 551 (it turned green while the train was within about 100..200 m), the reservation jumped to 45, the next signal facing it (856 on edge 45, 1.1 km further on). Not seen extending early while the train was still about 400 m out. Whether that is a lookahead distance or the block beyond 551 being occupied by another train is unknown. Confirmed (2026-10-24).
+- Braking distance is the minimum (user's principle), confirmed with two signals 3 m apart (503, then 318), train 591 at 22.7 m/s, logger output 2026-10-24:
+  - t=1437.8: reservation extended past 503 to 318 (one section), the front still 37..134 m before 503 (braking distance at 2.5 m/s²: about 103 m).
+  - t=1438.6: extended past 318 to the next signal (850), the front still on the same edge, before 503.
+  - The second extension came 0.8 s (18 m) after the first, though 318 is only 3 m past 503; a fixed lookahead distance would have taken it after 3 m. Game time moves in 0.2 s steps. Not understood yet.
+- Departing a terminal, the reservation went straight to the first signal (503, several hundred metres on) at walking pace: at least one whole section, however far.
+- `isTrainWaitingForFreePath` is true for a train at full speed (543, 31 m/s) whose reservation can't be extended past the next signal (856, red): it marks a failed extension, not a stopped train.
+- A train held at a red signal with no further signal ahead reserved all the way to the end of its path when the signal cleared (419, at 0.6 m/s).
+- After loading a save, each train starts with a new path from its position (index 0) and a reservation over just the edges it occupies plus the next; 0.2 s later it was extended as normal.
 - The end of the path also ends a reservation: arriving at a terminal station, the reservation ran to the last edge of the path, the end of the platform track (user: both stations here are terminals).
 - To draw the reserved path ahead: edges `occupiedFrontIndex` .. `reservedTo - 1` (or start at the train's front position).
 
