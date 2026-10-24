@@ -84,6 +84,11 @@ local function log(msg)
 	print("[pathvis] " .. msg)
 end
 
+local function clock()
+	local ok, c = pcall(os.clock)
+	return ok and c or nil
+end
+
 local function logOnce(key, msg)
 	if state.logged[key] then return end
 	state.logged[key] = true
@@ -514,11 +519,6 @@ function overlay.setEmergency(on)
 	state.emergency = on and true or false
 	state.time = nil
 	overlay.poll()
-end
-
-local function clock()
-	local ok, c = pcall(os.clock)
-	return ok and c or nil
 end
 
 -- How far into the current step we are (0..1), from the real clock and how fast game time
