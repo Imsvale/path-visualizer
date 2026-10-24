@@ -27,6 +27,7 @@ end
 
 local Settings = react.RegisterRecipe("ImsvalePathVisualizerSettings", function()
 	local braking = react.useState(overlay.isBraking() and 1 or 0)
+	local emergency = react.useState(overlay.isEmergency() and 1 or 0)
 	return builtin.BoxLayout{
 		orientation = builtin.type.Orientation.Vertical,
 		children = {
@@ -36,6 +37,14 @@ local Settings = react.RegisterRecipe("ImsvalePathVisualizerSettings", function(
 				onValueChange = function(value)
 					braking:set(value)
 					overlay.setBraking(value == 1)
+				end,
+			},
+			builtin.CheckBox{
+				label = _("Emergency stop"),
+				value = emergency:old(),
+				onValueChange = function(value)
+					emergency:set(value)
+					overlay.setEmergency(value == 1)
 				end,
 			},
 		},

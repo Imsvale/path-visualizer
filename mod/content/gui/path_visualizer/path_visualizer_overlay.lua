@@ -34,11 +34,17 @@ local COLOR_GREEN = { 0.2, 1.0, 0.3, 1.0 }
 local COLOR_PATH_END = { 1.0, 1.0, 1.0, 1.0 }
 local COLOR_BRAKING = { 1.0, 0.9, 0.1, 1.0 }
 local COLOR_PATHPOS = { 1.0, 0.2, 1.0, 1.0 }
+local COLOR_EMERGENCY = { 0.6, 0.45, 1.0, 1.0 }
+
+-- A manual stop braked at three times the train's brake deceleration (docs/MOVE_PATH.md,
+-- one observation; no setting for it found).
+local EMERGENCY_FACTOR = 3
 
 local state = {
 	-- settings, per session: the HUD button (path_visualizer_button.script.lua) and its popover
 	on = true,
 	braking = true,
+	emergency = false,
 
 	version = 0,
 	lines = nil, -- what the EdgeRenderable gets: the static lines plus the braking bars
@@ -258,28 +264,44 @@ local function pathPoint(mp, networks, i, rem)
 	return g, t
 end
 
--- For each selected train: a bar at its pathPos, and, if switched on, one where it would
--- stop if it started braking now (v² / 2a ahead of its front). Both moved on by speed ×
--- `elapsed` seconds of game time since the last step, so they move smoothly in between.
+-- Distance and speed after `dt` seconds from speed v at acceleration a, not going backwards
+-- (a braking train stops).
+local function advance(v, a, dt)
+	if a < 0 and v + a * dt <= 0 then
+		return v * v / (-2 * a), 0
+	end
+	return v * dt + a * dt * dt / 2, v + a * dt
+end
+
+-- For each selected train: a bar at its pathPos, and, if switched on, where it would stop
+-- if it started braking now (v² / 2a ahead of its front), normally and in an emergency stop.
+-- All moved on by `elapsed` seconds of game time since the last step, at the train's speed
+-- and acceleration, so they move smoothly in between.
 local function buildBraking(elapsed)
 	local lines = {}
 	for train in pairs(state.selected) do
 		pcall(function()
 			local mp = api.engine.getComponent(train, api.type.ComponentType.MOVE_PATH)
 			local pp = mp.dyn.pathPos
-			local pos = pp.pos + mp.dyn.speed * elapsed
+			local moved, v = advance(mp.dyn.speed, mp.dyn.accel or 0, elapsed)
+			local pos = pp.pos + moved
 			local networks = {}
 			local g, t = pathPoint(mp, networks, pp.edgeIndex, pos)
 			if g then addBar(lines, g, t, COLOR_PATHPOS, BAR_WIDTH) end
-			if not state.braking then return end
+			if not state.braking and not state.emergency then return end
 			local d = vehicleData(train)
 			if not d then
 				logOnce("nodata" .. tostring(train), "no brake deceleration for train " .. tostring(train))
 				return
 			end
-			local v = mp.dyn.speed
-			g, t = pathPoint(mp, networks, pp.edgeIndex, pos + d.front + v * v / (2 * d.brake))
-			if g then addBar(lines, g, t, COLOR_BRAKING, BAR_WIDTH) end
+			if state.braking then
+				g, t = pathPoint(mp, networks, pp.edgeIndex, pos + d.front + v * v / (2 * d.brake))
+				if g then addBar(lines, g, t, COLOR_BRAKING, BAR_WIDTH) end
+			end
+			if state.emergency then
+				g, t = pathPoint(mp, networks, pp.edgeIndex, pos + d.front + v * v / (2 * d.brake * EMERGENCY_FACTOR))
+				if g then addBar(lines, g, t, COLOR_EMERGENCY, BAR_WIDTH) end
+			end
 		end)
 	end
 	return lines
@@ -325,6 +347,16 @@ end
 
 function overlay.setBraking(on)
 	state.braking = on and true or false
+	state.time = nil
+	overlay.poll()
+end
+
+function overlay.isEmergency()
+	return state.emergency
+end
+
+function overlay.setEmergency(on)
+	state.emergency = on and true or false
 	state.time = nil
 	overlay.poll()
 end
