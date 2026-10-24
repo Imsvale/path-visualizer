@@ -3,6 +3,9 @@
 In order (user, 2026-10-24):
 
 1. ~~Through-station test~~: done 2026-10-24, see MOVE_PATH.md (Station stop).
+1b. Trains whose route continues through a station: their path doesn't end at the platform,
+   so the reservation should have to reach the next signal beyond it (user). Test with trains
+   running through the middle station. (User sets up the save.)
 2. On/off button in the HUD's mod button area.
 3. Highlight the selected train's reservation over the others.
 4. The `[pathvis]` reservation logger (game script) behind a dev switch, off in a release.

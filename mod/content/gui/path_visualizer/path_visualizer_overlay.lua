@@ -30,6 +30,7 @@ local COLOR_GREEN = { 0.2, 1.0, 0.3, 1.0 }
 local COLOR_PATH_END = { 1.0, 1.0, 1.0, 1.0 }
 
 local state = {
+	on = true, -- the HUD button (path_visualizer_button.script.lua); per session
 	version = 0,
 	lines = nil,
 	signature = nil,
@@ -182,9 +183,21 @@ local function build()
 	state.version = state.version + 1
 end
 
+function overlay.isOn()
+	return state.on
+end
+
+function overlay.setOn(on)
+	state.on = on and true or false
+	state.lines, state.signature, state.time = nil, nil, nil
+	state.version = state.version + 1
+	-- read at once, also while paused
+	overlay.poll()
+end
+
 -- Reads the trains once per game time step (time stands still while paused).
 function overlay.poll()
-	if state.failed then return end
+	if state.failed or not state.on then return end
 	local ok, err = pcall(function()
 		local now = gameTime()
 		if now == state.time then return end
