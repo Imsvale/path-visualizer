@@ -10,15 +10,25 @@
 -- reservation and was refused). A bar marks where the reservation ends, coloured by the next
 -- section beyond it (to the next signal facing the train): white if it's free, red if another
 -- train holds an edge of it or a node inside it, grey where the reservation already reaches
--- the end of the leg's path (the next leg's path doesn't exist yet). Selected trains (an open entity window) get wider lines with a
--- white outline and, if switched on, bars where they would stop braking now (normally and in
--- an emergency stop).
+-- the end of the leg's path (the next leg's path doesn't exist yet). Selected trains (an open
+-- entity window) get wider lines with a white outline and, if switched on, bars where they
+-- would stop braking now (normally and in an emergency stop).
 --
 -- A 3D overlay only renders inside the active action's ActionDescriptor (network-wireframe,
 -- parallelism), so path_visualizer_replace.script.lua puts these lines into every
 -- descriptor. subscribe() runs in the action's recipe: its onStep polls the trains (once per
 -- game time step, or when the selection changes) and redraws the action when the lines
 -- changed.
+--
+-- Nothing is worked out again that can't have changed (2026-10-24):
+-- * the network (each track entity's edges: geometry, end nodes), signal lookups and line
+--   pieces are cached until a build (onProposalApply);
+-- * each train's path is read into plain numbers once per leg (entity, index, direction per
+--   edge; lengths, directions along the geometry and signals filled in as needed);
+-- * a reservation is a queue that changes at its ends: who holds which edge and node is
+--   updated by the difference, and a train's line pieces only rebuilt when its own ends,
+--   colour or selection changed;
+-- * the selected trains' moving bars are only published when they've visibly moved.
 
 local react = ug_require "::/gui/main/react.lua"
 local builtin = ug_require "::/gui/main/builtin.lua"
@@ -30,6 +40,8 @@ local WIDTH = 0.6
 local WIDTH_SELECTED = 1.2
 local BAR = 1.25 -- half length of the bars across the track (metres)
 local BAR_WIDTH = 0.3
+local BAR_MOVE = 0.3 -- metres a moving bar has to move before it's redrawn
+local SELECTION_INTERVAL = 0.25 -- seconds between checks for open train windows
 
 local function v2(x, y) return api.type.Vec2f.new(x, y) end
 local function v4(c) return api.type.Vec4f.new(c[1], c[2], c[3], c[4]) end
@@ -44,6 +56,8 @@ local COLOR_PATHPOS = { 1.0, 0.2, 1.0, 1.0 }
 local COLOR_EMERGENCY = { 0.6, 0.45, 1.0, 1.0 }
 local COLOR_OUTLINE = { 1.0, 1.0, 1.0, 0.9 }
 local OUTLINE_WIDTH = 0.15
+
+local END_COLORS = { leg = COLOR_END_LEG, taken = COLOR_END_TAKEN, free = COLOR_END_FREE }
 
 -- for the settings popover's colour swatches
 overlay.colors = { braking = COLOR_BRAKING, emergency = COLOR_EMERGENCY }
@@ -66,20 +80,25 @@ local state = {
 	emergency = false,
 
 	version = 0,
-	lines = nil, -- what the EdgeRenderable gets: the static lines plus the braking bars
-	static = {}, -- reservations, rebuilt when the signature changes
-	signature = nil,
+	lines = nil, -- what the EdgeRenderable gets: the static lines plus the moving bars
+	static = {}, -- every train's line pieces, joined when one of them changed
+	bars = {}, -- the moving bars last published
+	barsKey = nil, -- where they were, rounded to BAR_MOVE
 	time = nil,
-	trains = {}, -- train entities seen in the last build
+	trainList = {}, -- train entities seen in the last build
+	tr = {}, -- train -> its state (see readTrain)
+	heldEdges = {}, -- edge key -> the train holding it
+	heldNodes = {}, -- node key -> { train -> how many of its held edges end there }
 	selected = {}, -- train -> true
 	selectionKey = "",
+	selectionChecked = nil, -- clock() of the last check
 	vehicleData = {}, -- train -> { brake = deceleration, front = metres ahead of pathPos }
 	failed = false,
 	logged = {},
 	sectionInfo = {}, -- dev log: train -> the next section's verdict
 	edgeCache = {}, -- track entity -> its edges (entityEdges)
 	signalCache = {}, -- edge and direction -> whether a signal faces that way (hasSignal)
-	lineCache = {}, -- edge and style -> its line piece; edge .. "outline" -> its outline pieces
+	lineCache = {}, -- edge and style -> its line piece(s)
 	cacheSince = nil, -- clock() when the caches were last cleared
 	cacheDirtyUntil = nil, -- clock() until which they're cleared on every build (after a build)
 	timing = { polls = 0, builds = 0, total = 0, max = 0, since = nil }, -- dev timing log
@@ -132,21 +151,22 @@ local function dist2(p, q)
 	return (p.x - q.x) ^ 2 + (p.y - q.y) ^ 2 + (p.z - q.z) ^ 2
 end
 
--- A bar across geometry g at parameter t, into lines.
-local function addBar(lines, g, t, color, width)
+-- A bar across geometry g at parameter t.
+local function makeBar(g, t, color, width)
 	local p = calc(g, t)
 	local a, b = calc(g, math.max(0, t - 0.01)), calc(g, math.min(1, t + 0.01))
 	local dx, dy = b.x - a.x, b.y - a.y
 	local len = math.sqrt(dx * dx + dy * dy)
-	if len < 1e-6 then return end
+	if len < 1e-6 then return nil end
 	local nx, ny = -dy / len * BAR, dx / len * BAR
-	lines[#lines + 1] = makeEdge(straightGeometry(p.x + nx, p.y + ny, p.x - nx, p.y - ny, p.z), color, width)
+	return makeEdge(straightGeometry(p.x + nx, p.y + ny, p.x - nx, p.y - ny, p.z), color, width)
 end
 
 -- Thin lines along both sides of geometry g, `h` metres out (EdgeRenderable has no lateral
--- offset): g sampled about every 4 m, the samples shifted sideways, joined by straight edges.
+-- offset): the samples shifted sideways, joined by straight edges. A straight edge needs
+-- only its two ends; curves are sampled about every 8 m.
 local function addOutline(lines, g, h)
-	local n = math.max(2, math.ceil(g.length / 4))
+	local n = g.type == api.type.EdgeGeometry.Type.STRAIGHT and 1 or math.max(2, math.ceil(g.length / 8))
 	local pts = {}
 	for k = 0, n do pts[k] = calc(g, k / n) end
 	for _, side in ipairs({ 1, -1 }) do
@@ -225,96 +245,166 @@ local function edgeData(id)
 	return list and list[id.index + 1]
 end
 
--- Geometry of a path edge (EdgeId). (`networks` is no longer used: the cache is session-wide.)
-local function geometryOf(_networks, id)
+local function geometryOf(id)
 	local e = edgeData(id)
 	return e and e.geometry
 end
 
--- The node keys of a track edge's two ends; empty if they can't be read.
-local function nodesOf(_networks, id)
+local function nodesOf(id)
 	local e = edgeData(id)
 	return e and e.nodes or {}
 end
 
 -- Whether a signal on the edge faces a train running along it in direction dir; cached like
--- the edges.
+-- the edges. id is a plain { entity, index }: a fresh EdgeId is made for the lookup.
 local function hasSignal(id, dir)
 	local key = edgeKey(id) .. (dir and "+" or "-")
 	local cached = state.signalCache[key]
 	if cached == nil then
-		local sid = api.engine.system.signalSystem.getSignal(id, dir)
-		cached = (sid and sid.entity >= 0) and true or false
+		cached = false
+		pcall(function()
+			local eid = api.type.EdgeId.new()
+			eid.entity, eid.index = id.entity, id.index
+			local sid = api.engine.system.signalSystem.getSignal(eid, dir)
+			cached = (sid and sid.entity >= 0) and true or false
+		end)
 		state.signalCache[key] = cached
 	end
 	return cached
+end
+
+---------------------------------------------------------------------------------------------
+-- a train's path, read once per leg
+
+-- The path as plain numbers (edge ids from the component may point into its data, like
+-- geometries): ids[i] = { entity, index }, keys[i], dirs[i], for i = 1..n (path index + 1).
+-- fw (direction along the geometry) and signal are filled in as needed.
+local function readPath(edges, n, key)
+	local p = { key = key, n = n, ids = {}, keys = {}, dirs = {}, fw = {}, signal = {} }
+	for i = 1, n do
+		local e = edges[i]
+		local id = { entity = e.edgeId.entity, index = e.edgeId.index }
+		p.ids[i], p.keys[i], p.dirs[i] = id, edgeKey(id), e.dir
+	end
+	return p
+end
+
+-- Whether the train runs along path edge i (1-based) from t = 0 to t = 1.
+local function pathForward(p, i)
+	local fw = p.fw[i]
+	if fw == nil then
+		local g = geometryOf(p.ids[i])
+		fw = g and forward(i > 1 and geometryOf(p.ids[i - 1]) or nil, g, i < p.n and geometryOf(p.ids[i + 1]) or nil) or true
+		p.fw[i] = fw
+	end
+	return fw
+end
+
+-- Whether a signal faces the train on path edge i (1-based).
+local function pathSignal(p, i)
+	local s = p.signal[i]
+	if s == nil then
+		s = hasSignal(p.ids[i], p.dirs[i])
+		p.signal[i] = s
+	end
+	return s
+end
+
+-- The point `rem` metres along the path from the start of edge index i (0-based; walking on
+-- into the following edges, clamped to the path's end): its geometry and parameter t.
+local function pathPoint(p, i, rem)
+	local g = geometryOf(p.ids[i + 1])
+	while g and rem > g.length and i < p.n - 1 do
+		rem = rem - g.length
+		i = i + 1
+		g = geometryOf(p.ids[i + 1])
+	end
+	if not g or g.length < 0.1 then return nil end
+	local t = math.min(1, math.max(0, rem / g.length))
+	if not pathForward(p, i + 1) then t = 1 - t end
+	return g, t, i, rem
+end
+
+-- Metres along the path from (i0, p0) to (i1, p1), positions as edge index and metres into it.
+local function pathDistance(p, i0, p0, i1, p1)
+	if i1 < i0 then return -pathDistance(p, i1, p1, i0, p0) end
+	local d = p1 - p0
+	for i = i0, i1 - 1 do
+		local g = geometryOf(p.ids[i + 1])
+		d = d + (g and g.length or 0)
+	end
+	return d
+end
+
+---------------------------------------------------------------------------------------------
+-- who holds what, updated by the difference
+
+local function hold(train, p, i)
+	local id = p.ids[i + 1]
+	state.heldEdges[p.keys[i + 1]] = train
+	for _, k in ipairs(nodesOf(id)) do
+		local owners = state.heldNodes[k]
+		if not owners then
+			owners = {}
+			state.heldNodes[k] = owners
+		end
+		owners[train] = (owners[train] or 0) + 1
+	end
+end
+
+local function release(train, p, i)
+	local key = p.keys[i + 1]
+	if state.heldEdges[key] == train then state.heldEdges[key] = nil end
+	for _, k in ipairs(nodesOf(p.ids[i + 1])) do
+		local owners = state.heldNodes[k]
+		if owners and owners[train] then
+			owners[train] = owners[train] - 1
+			if owners[train] <= 0 then owners[train] = nil end
+			if next(owners) == nil then state.heldNodes[k] = nil end
+		end
+	end
+end
+
+-- From holding [a, b) of path pa to holding [c, d) of path pc: releases what's no longer held
+-- and holds what's new. On the same path only the ends change: the rear released, the front
+-- added.
+local function updateHeld(train, pa, a, b, pc, c, d)
+	if pa ~= pc then
+		if pa then for i = a, b - 1 do release(train, pa, i) end end
+		if pc then for i = c, d - 1 do hold(train, pc, i) end end
+		return
+	end
+	for i = a, math.min(b, c) - 1 do release(train, pa, i) end
+	for i = math.max(a, d), b - 1 do release(train, pa, i) end
+	for i = c, math.min(d, a) - 1 do hold(train, pc, i) end
+	for i = math.max(c, b), d - 1 do hold(train, pc, i) end
+end
+
+-- Whether another train holds the section ahead, path indices [s, e): one of its edges, or a
+-- node inside it (shared by two of its edges: a switch, or a crossing, where tracks meet
+-- without sharing an edge). The section's two end nodes don't count: a train right behind it
+-- or just past it touches them without being in the way.
+local function sectionTaken(train, p, s, e)
+	local count = {}
+	for i = s, e - 1 do
+		local owner = state.heldEdges[p.keys[i + 1]]
+		if owner and owner ~= train then return true end
+		for _, k in ipairs(nodesOf(p.ids[i + 1])) do count[k] = (count[k] or 0) + 1 end
+	end
+	for k, c in pairs(count) do
+		if c >= 2 then
+			for owner in pairs(state.heldNodes[k] or {}) do
+				if owner ~= train then return true end
+			end
+		end
+	end
+	return false
 end
 
 local function isSelected(train)
 	local visible = false
 	pcall(function() visible = api.gui.byId.isVisible("temp.view.entity_" .. tostring(train)) end)
 	return visible
-end
-
--- One train's reservation, or nil: the edges it holds, the ones ahead of its front (drawn),
--- and the next section beyond the reservation: from its end to the next signal facing the
--- train (the signal's edge is the first one past it) or the end of the leg's path.
-local function readTrain(train)
-	local mp = api.engine.getComponent(train, api.type.ComponentType.MOVE_PATH)
-	if not mp or not mp.reservedTo then return nil end
-	local edges = mp.path.edges
-	local n = #edges
-	local to = math.min(mp.reservedTo, n)
-	local from = math.max(mp.occupiedFrontIndex, mp.reservedFrom, 0)
-	local held, ids = {}, {}
-	for i = math.max(mp.reservedFrom, 0), to - 1 do
-		held[#held + 1] = edges[i + 1].edgeId
-		if i >= from then ids[#ids + 1] = edges[i + 1].edgeId end
-	end
-	local section = {}
-	for i = to, n - 1 do
-		local e = edges[i + 1]
-		if i > to and hasSignal(e.edgeId, e.dir) then break end
-		section[#section + 1] = e.edgeId
-	end
-	local selected = state.selected[train] == true
-	return {
-		train = train,
-		held = held,
-		ids = ids,
-		section = section,
-		atLegEnd = to >= n,
-		-- the edges either side, to find which end of the last edge the reservation ends at
-		prevId = from > 0 and edges[from].edgeId or nil,
-		nextId = to < n and edges[to + 1].edgeId or nil,
-		selected = selected,
-		waiting = api.engine.system.landVehicleMoveSystem.isTrainWaitingForFreePath(train),
-		key = string.format("%s:%d:%d:%d:%d:%s", tostring(train), n, from, to,
-			ids[1] and ids[1].entity or -1, tostring(selected)),
-	}
-end
-
--- Whether another train holds the section ahead of t: one of its edges, or a node inside it
--- (shared by two of its edges: a switch, or a crossing, where tracks meet without sharing an
--- edge). The section's two end nodes don't count: a train right behind it or just past it
--- touches them without being in the way.
-local function sectionTaken(t, heldEdges, heldNodes, networks)
-	local count = {}
-	for _, id in ipairs(t.section) do
-		local owner = heldEdges[edgeKey(id)]
-		if owner and owner ~= t.train then return true end
-		for _, k in ipairs(nodesOf(networks, id)) do
-			count[k] = (count[k] or 0) + 1
-		end
-	end
-	for k, c in pairs(count) do
-		if c >= 2 then
-			for owner in pairs(heldNodes[k] or {}) do
-				if owner ~= t.train then return true end
-			end
-		end
-	end
-	return false
 end
 
 -- The trains. (landVehicleMoveSystem.forEach goes over every land vehicle, buses and trucks
@@ -335,81 +425,155 @@ local function phase(name, since)
 	return c
 end
 
+---------------------------------------------------------------------------------------------
+-- per game step
+
+-- Reads one train and brings its state up to date. Returns true if its line pieces changed.
+-- Per train: path (readPath), held = [a, b) path indices held, front (first drawn index), to,
+-- waiting, selected, endKind, pieces (its line pieces).
+local function updateTrain(train)
+	local st = state.tr[train]
+	if not st then
+		st = { a = 0, b = 0, pieces = {} }
+		state.tr[train] = st
+	end
+	local mp = api.engine.getComponent(train, api.type.ComponentType.MOVE_PATH)
+	if not mp or not mp.reservedTo then
+		updateHeld(train, st.path, st.a, st.b, nil, 0, 0)
+		local changed = #st.pieces > 0
+		st.path, st.a, st.b, st.pieces, st.key = nil, 0, 0, {}, nil
+		st.changed = false
+		return changed
+	end
+
+	-- the path: read again only for a new leg (its edge list is read once a step to tell)
+	local edges = mp.path.edges
+	local n = #edges
+	local key = n > 0 and string.format("%d:%d:%d:%d:%d", n, edges[1].edgeId.entity, edges[1].edgeId.index,
+		edges[n].edgeId.entity, edges[n].edgeId.index) or "0"
+	local p = st.path
+	if not p or p.key ~= key then p = readPath(edges, n, key) end
+
+	local a = math.max(mp.reservedFrom, 0)
+	local b = math.min(mp.reservedTo, n)
+	if b < a then b = a end
+	updateHeld(train, st.path, st.a, st.b, p, a, b)
+	st.path, st.a, st.b = p, a, b
+
+	local front = math.max(mp.occupiedFrontIndex, a, 0)
+	local waiting = api.engine.system.landVehicleMoveSystem.isTrainWaitingForFreePath(train)
+	local selected = state.selected[train] == true
+	local changed = st.key ~= key or st.front ~= front or st.to ~= b or st.waiting ~= waiting or st.selected ~= selected
+	st.key, st.front, st.to, st.waiting, st.selected = key, front, b, waiting, selected
+	st.changed = changed
+	return changed
+end
+
+-- The next section's verdict for a train (after every train's holdings are up to date).
+local function updateEnd(train)
+	local st = state.tr[train]
+	local p = st.path
+	if not p then return false end
+	local kind
+	if st.to >= p.n then
+		kind = "leg"
+	else
+		local e = st.to + 1
+		while e < p.n and not pathSignal(p, e + 1) do e = e + 1 end
+		kind = sectionTaken(train, p, st.to, e) and "taken" or "free"
+		if LOG_SELECTED and st.selected then
+			state.sectionInfo[train] = string.format("next section: %s, %d edges (nodes per edge: %d)",
+				kind, e - st.to, #nodesOf(p.ids[st.to + 1]))
+		end
+	end
+	local changed = st.endKind ~= kind
+	st.endKind = kind
+	return changed
+end
+
+-- A train's line pieces, from line pieces cached per track edge (built once each).
+local function buildPieces(train)
+	local st = state.tr[train]
+	local p = st.path
+	local pieces = {}
+	st.pieces = pieces
+	if not p or st.to <= st.front then return end
+	local cache = state.lineCache
+	local color = st.waiting and COLOR_WAITING or COLOR_PATH
+	local width = st.selected and WIDTH_SELECTED or WIDTH
+	local style = (st.waiting and "w" or "p") .. (st.selected and "s" or "n")
+	local last
+	for i = st.front, st.to - 1 do
+		local id, key = p.ids[i + 1], p.keys[i + 1]
+		local g = geometryOf(id)
+		-- (a zero-length edge crashed the game drawing it, parallelism)
+		if g and g.length >= 0.1 then
+			local line = cache[key .. style]
+			if not line then
+				line = makeEdge(g, color, width)
+				cache[key .. style] = line
+			end
+			pieces[#pieces + 1] = line
+			if st.selected then
+				local outline = cache[key .. "outline"]
+				if not outline then
+					outline = {}
+					addOutline(outline, g, (WIDTH_SELECTED + OUTLINE_WIDTH) / 2)
+					cache[key .. "outline"] = outline
+				end
+				for _, e in ipairs(outline) do pieces[#pieces + 1] = e end
+			end
+			last = i
+		end
+	end
+	if last then
+		-- the end bar, at the end of the last edge in the direction of travel
+		local fw = pathForward(p, last + 1)
+		local key = p.keys[last + 1] .. "end" .. (fw and "1" or "0") .. st.endKind
+		local bar = cache[key]
+		if bar == nil then
+			bar = makeBar(geometryOf(p.ids[last + 1]), fw and 1 or 0, END_COLORS[st.endKind], BAR_WIDTH) or false
+			cache[key] = bar
+		end
+		if bar then pieces[#pieces + 1] = bar end
+	end
+end
+
+-- Brings every train up to date; returns true if the static lines changed.
 local function buildStatic()
 	local t0 = TIMING and clock() or nil
-	local trains, parts = {}, {}
-	local entities = railVehicles()
-	for _, train in ipairs(entities) do
-		local t = readTrain(train)
-		if t then trains[#trains + 1] = t end
+	local list = railVehicles()
+	local seen, changed = {}, false
+	for _, train in ipairs(list) do
+		seen[train] = true
+		if updateTrain(train) then changed = true end
 	end
-	state.trains = entities
+	-- trains gone (sold, or no longer listed)
+	for train, st in pairs(state.tr) do
+		if not seen[train] then
+			updateHeld(train, st.path, st.a, st.b, nil, 0, 0)
+			state.tr[train] = nil
+			changed = true
+		end
+	end
+	state.trainList = list
 	t0 = phase("read", t0)
 
-	-- who holds which edge and node
-	local networks, heldEdges, heldNodes = {}, {}, {}
-	for _, t in ipairs(trains) do
-		for _, id in ipairs(t.held) do
-			heldEdges[edgeKey(id)] = t.train
-			for _, k in ipairs(nodesOf(networks, id)) do
-				heldNodes[k] = heldNodes[k] or {}
-				heldNodes[k][t.train] = true
-			end
-		end
+	local dirty = {}
+	for _, train in ipairs(list) do
+		local st = state.tr[train]
+		if updateEnd(train) or st.changed then dirty[#dirty + 1] = train end
 	end
-	for _, t in ipairs(trains) do
-		t.endKind = t.atLegEnd and "leg" or sectionTaken(t, heldEdges, heldNodes, networks) and "taken" or "free"
-		parts[#parts + 1] = t.key .. ":" .. tostring(t.waiting) .. ":" .. t.endKind
-		if LOG_SELECTED and t.selected then
-			local nodes = t.section[1] and #nodesOf(networks, t.section[1]) or 0
-			state.sectionInfo[t.train] = string.format("next section: %s, %d edges (nodes read per edge: %d)", t.endKind, #t.section, nodes)
-		end
-	end
-
-	local signature = table.concat(parts, "|")
 	t0 = phase("tables", t0)
-	if signature == state.signature then return false end
-	state.signature = signature
+	if #dirty == 0 and not changed then return false end
 
-	-- A track edge's line pieces depend only on its geometry, colour and width: built once and
-	-- reused (state.lineCache, cleared with the network caches). A rebuild then only picks the
-	-- pieces from the train's front edge to the end of its reservation.
-	local cache = state.lineCache
+	for _, train in ipairs(dirty) do buildPieces(train) end
 	local lines = {}
-	for _, t in ipairs(trains) do
-		local color = t.waiting and COLOR_WAITING or COLOR_PATH
-		local width = t.selected and WIDTH_SELECTED or WIDTH
-		local style = (t.waiting and "w" or "p") .. (t.selected and "s" or "n")
-		local last
-		for _, id in ipairs(t.ids) do
+	for _, train in ipairs(list) do
+		local st = state.tr[train]
+		for _, e in ipairs(st.pieces) do
 			if #lines >= MAX_EDGES then break end
-			local g = geometryOf(networks, id)
-			-- (a zero-length edge crashed the game drawing it, parallelism)
-			if g and g.length >= 0.1 then
-				local key = edgeKey(id)
-				local line = cache[key .. style]
-				if not line then
-					line = makeEdge(g, color, width)
-					cache[key .. style] = line
-				end
-				lines[#lines + 1] = line
-				if t.selected then
-					local outline = cache[key .. "outline"]
-					if not outline then
-						outline = {}
-						addOutline(outline, g, (WIDTH_SELECTED + OUTLINE_WIDTH) / 2)
-						cache[key .. "outline"] = outline
-					end
-					for _, e in ipairs(outline) do lines[#lines + 1] = e end
-				end
-			end
-			last = g or last
-		end
-		if last and #lines < MAX_EDGES then
-			local prev = #t.ids > 1 and geometryOf(networks, t.ids[#t.ids - 1]) or geometryOf(networks, t.prevId)
-			local fw = forward(prev, last, geometryOf(networks, t.nextId))
-			local endColor = t.endKind == "leg" and COLOR_END_LEG or t.endKind == "taken" and COLOR_END_TAKEN or COLOR_END_FREE
-			addBar(lines, last, fw and 1 or 0, endColor, BAR_WIDTH)
+			lines[#lines + 1] = e
 		end
 	end
 	state.static = lines
@@ -417,9 +581,19 @@ local function buildStatic()
 	return true
 end
 
+-- Forgets every train's state (after the network caches were cleared: the line pieces and
+-- node keys may be stale).
+local function resetTrains()
+	state.tr, state.heldEdges, state.heldNodes = {}, {}, {}
+	state.static, state.barsKey = {}, nil
+end
+
+---------------------------------------------------------------------------------------------
+-- the selected trains' moving bars, every frame
+
 -- Brake deceleration and the front's distance ahead of pathPos, per train, from
--- carriageListSystem.getVehicleData. Where the front is relative to pathPos isn't known yet:
--- taken from bounds.front if it reads as a number, else half the length. Logged once per train.
+-- carriageListSystem.getVehicleData (bounds.front, the nose measured from pathPos, the middle
+-- of the train). Logged once per train.
 local function vehicleData(train)
 	local d = state.vehicleData[train]
 	if d ~= nil then return d or nil end
@@ -439,59 +613,29 @@ local function vehicleData(train)
 	return d or nil
 end
 
--- The point `rem` metres along the path from the start of edge i (walking on into the
--- following edges, clamped to the path's end): its geometry and parameter t.
-local function pathPoint(mp, networks, i, rem)
-	local n = #mp.path.edges
-	local g = geometryOf(networks, mp.path.edges[i + 1].edgeId)
-	while g and rem > g.length and i < n - 1 do
-		rem = rem - g.length
-		i = i + 1
-		g = geometryOf(networks, mp.path.edges[i + 1].edgeId)
-	end
-	if not g or g.length < 0.1 then return nil end
-	local prev = i > 0 and geometryOf(networks, mp.path.edges[i].edgeId) or nil
-	local next = i < n - 1 and geometryOf(networks, mp.path.edges[i + 2].edgeId) or nil
-	local t = math.min(1, math.max(0, rem / g.length))
-	if not forward(prev, g, next) then t = 1 - t end
-	return g, t
-end
-
--- Metres along the path from (i0, p0) to (i1, p1), positions as edge index and metres into it.
-local function pathDistance(mp, networks, i0, p0, i1, p1)
-	if i1 < i0 then return -pathDistance(mp, networks, i1, p1, i0, p0) end
-	local d = p1 - p0
-	for i = i0, i1 - 1 do
-		local g = geometryOf(networks, mp.path.edges[i + 1].edgeId)
-		d = d + (g and g.length or 0)
-	end
-	return d
-end
-
--- For each selected train: a bar at its pathPos, and, if switched on, where it would stop
--- if it started braking now (v² / 2a ahead of its front), normally and in an emergency stop.
--- `fraction` (0..1) of the way from the previous step (dyn0) to the current one (dyn): the
--- game draws a train between the two (taken to be so: drawing at dyn, or pushing on past it,
--- put the bars ahead of the train), so the bars move with it.
-local function buildBraking(fraction)
-	local lines = {}
+-- For each selected train: a bar at its pathPos (dev), and, if switched on, where it would
+-- stop if it started braking now (v² / 2a ahead of its front), normally and in an emergency
+-- stop. `fraction` (0..1) of the way from the previous step (dyn0) to the current one (dyn):
+-- the game draws a train between the two (taken to be so: drawing at dyn, or pushing on past
+-- it, put the bars ahead of the train), so the bars move with it. Returns the bars to draw,
+-- or nil if none has moved by BAR_MOVE since the last ones published.
+local function buildBars(fraction)
+	local wanted = {}
 	for train in pairs(state.selected) do
 		pcall(function()
+			local st = state.tr[train]
+			local p = st and st.path
+			if not p then return end
 			local mp = api.engine.getComponent(train, api.type.ComponentType.MOVE_PATH)
-			local networks = {}
 			local pp, pp0 = mp.dyn.pathPos, mp.dyn0.pathPos
 			local edge, pos = pp.edgeIndex, pp.pos
 			local v = mp.dyn.speed
 			if fraction < 1 and pp0.edgeIndex <= pp.edgeIndex then
 				edge = pp0.edgeIndex
-				pos = pp0.pos + fraction * pathDistance(mp, networks, pp0.edgeIndex, pp0.pos, pp.edgeIndex, pp.pos)
+				pos = pp0.pos + fraction * pathDistance(p, pp0.edgeIndex, pp0.pos, pp.edgeIndex, pp.pos)
 				v = mp.dyn0.speed + fraction * (mp.dyn.speed - mp.dyn0.speed)
 			end
-			local g, t
-			if PATHPOS_MARKER then
-				g, t = pathPoint(mp, networks, edge, pos)
-				if g then addBar(lines, g, t, COLOR_PATHPOS, BAR_WIDTH) end
-			end
+			if PATHPOS_MARKER then wanted[#wanted + 1] = { p, edge, pos, COLOR_PATHPOS } end
 			if not state.braking and not state.emergency then return end
 			local d = vehicleData(train)
 			if not d then
@@ -502,30 +646,50 @@ local function buildBraking(fraction)
 			-- brakeDeceleration of 2.5: with the nominal value the point lands a little long)
 			local brake = (mp.dyn.brakeDecel or 0) > 0 and mp.dyn.brakeDecel or d.brake
 			if state.braking then
-				g, t = pathPoint(mp, networks, edge, pos + d.front + v * v / (2 * brake))
-				if g then addBar(lines, g, t, COLOR_BRAKING, BAR_WIDTH) end
+				wanted[#wanted + 1] = { p, edge, pos + d.front + v * v / (2 * brake), COLOR_BRAKING }
 			end
 			if state.emergency then
-				g, t = pathPoint(mp, networks, edge, pos + d.front + v * v / (2 * d.brake * EMERGENCY_FACTOR))
-				if g then addBar(lines, g, t, COLOR_EMERGENCY, BAR_WIDTH) end
+				wanted[#wanted + 1] = { p, edge, pos + d.front + v * v / (2 * d.brake * EMERGENCY_FACTOR), COLOR_EMERGENCY }
 			end
 		end)
 	end
-	return lines
+	-- where they'd go: redrawn only if one moved visibly (a standing train: never)
+	local points, keys = {}, {}
+	for _, w in ipairs(wanted) do
+		local g, t, i, rem = pathPoint(w[1], w[2], w[3])
+		if g then
+			points[#points + 1] = { g, t, w[4] }
+			keys[#keys + 1] = i .. ":" .. math.floor(rem / BAR_MOVE)
+		end
+	end
+	local key = table.concat(keys, "|")
+	if key == state.barsKey then return nil end
+	state.barsKey = key
+	local bars = {}
+	for _, pt in ipairs(points) do
+		local bar = makeBar(pt[1], pt[2], pt[3], BAR_WIDTH)
+		if bar then bars[#bars + 1] = bar end
+	end
+	return bars
 end
 
-local function publish(braking)
+local function publish()
 	if TIMING then state.timing.publishes = (state.timing.publishes or 0) + 1 end
 	local lines = {}
 	for _, e in ipairs(state.static) do lines[#lines + 1] = e end
-	for _, e in ipairs(braking) do lines[#lines + 1] = e end
+	for _, e in ipairs(state.bars) do lines[#lines + 1] = e end
 	state.lines = #lines > 0 and lines or nil
 	state.version = state.version + 1
 end
 
+-- Which trains have their window open: checked every SELECTION_INTERVAL (an isVisible call
+-- per train). Returns true if that changed.
 local function updateSelection()
+	local c = clock()
+	if c and state.selectionChecked and c - state.selectionChecked < SELECTION_INTERVAL then return false end
+	state.selectionChecked = c
 	local selected, keys = {}, {}
-	for _, train in ipairs(state.trains) do
+	for _, train in ipairs(state.trainList) do
 		if isSelected(train) then
 			selected[train] = true
 			keys[#keys + 1] = tostring(train)
@@ -543,7 +707,8 @@ end
 
 function overlay.setOn(on)
 	state.on = on and true or false
-	state.lines, state.static, state.signature, state.time = nil, {}, nil, nil
+	resetTrains()
+	state.lines, state.bars, state.time = nil, {}, nil
 	state.version = state.version + 1
 	-- read at once, also while paused
 	overlay.poll()
@@ -555,7 +720,7 @@ end
 
 function overlay.setBraking(on)
 	state.braking = on and true or false
-	state.time = nil
+	state.time, state.barsKey = nil, nil
 	overlay.poll()
 end
 
@@ -565,7 +730,7 @@ end
 
 function overlay.setEmergency(on)
 	state.emergency = on and true or false
-	state.time = nil
+	state.time, state.barsKey = nil, nil
 	overlay.poll()
 end
 
@@ -588,8 +753,6 @@ local function noteStep(now)
 	state.stepClock = c
 end
 
--- Reads the trains once per game time step (time stands still while paused), and when the
--- selection changes. In between, only the selected trains' bars are moved on.
 -- dev: the overlay's cost, logged every 10 s of real time
 local function noteTiming(started, built)
 	local c = clock()
@@ -606,11 +769,13 @@ local function noteTiming(started, built)
 		log(string.format("timing: %.1f polls/s, %.1f builds/s, %.1f publishes/s, %.2f ms per poll (max %.1f), %.1f ms/s in all"
 			.. " (read %.1f, tables %.1f, lines %.1f ms/s); %d trains, %d lines",
 			tm.polls / s, tm.builds / s, (tm.publishes or 0) / s, tm.total / tm.polls, tm.max, tm.total / s,
-			(tm.read or 0) / s, (tm.tables or 0) / s, (tm.lines or 0) / s, #state.trains, state.lines and #state.lines or 0))
+			(tm.read or 0) / s, (tm.tables or 0) / s, (tm.lines or 0) / s, #state.trainList, state.lines and #state.lines or 0))
 		state.timing = { polls = 0, builds = 0, total = 0, max = 0, since = c }
 	end
 end
 
+-- Reads the trains once per game time step (time stands still while paused), and when the
+-- selection changes. In between, only the selected trains' bars are moved on.
 function overlay.poll()
 	if state.failed or not state.on then return end
 	local started = TIMING and clock() or nil
@@ -619,7 +784,13 @@ function overlay.poll()
 		local selectionChanged = updateSelection()
 		local now = gameTime()
 		if now == state.time and not selectionChanged then
-			if next(state.selected) ~= nil then publish(buildBraking(stepFraction())) end
+			if next(state.selected) ~= nil then
+				local bars = buildBars(stepFraction())
+				if bars then
+					state.bars = bars
+					publish()
+				end
+			end
 			return
 		end
 		if now ~= state.time then
@@ -629,8 +800,9 @@ function overlay.poll()
 					pcall(function()
 						local mp = api.engine.getComponent(train, api.type.ComponentType.MOVE_PATH)
 						local dyn = mp.dyn
+						local st = state.tr[train]
 						log(string.format("sel t=%.1f train=%s n=%d P=%d@%.2f v=%.3f a=%.3f b=%.3f standing=%.1f untilAccel=%.2f state=%s | %s",
-							now / 1000, tostring(train), #mp.path.edges, dyn.pathPos.edgeIndex, dyn.pathPos.pos, dyn.speed,
+							now / 1000, tostring(train), st and st.path and st.path.n or -1, dyn.pathPos.edgeIndex, dyn.pathPos.pos, dyn.speed,
 							dyn.accel, dyn.brakeDecel, dyn.timeStanding, dyn.timeUntilAccel, tostring(mp.state),
 							state.sectionInfo[train] or "-"))
 					end)
@@ -638,21 +810,25 @@ function overlay.poll()
 			end
 		end
 		state.time = now
-		if selectionChanged then state.signature = nil end
 		-- the network caches: cleared after a build (onProposalApply, see subscribe; for 2 s, in
 		-- case the engine applies it a little later), and every 5 minutes for builds made by
 		-- script, which may not fire the event (e.g. Parallelism's extra tracks)
 		local c = clock()
 		if c and (not state.cacheSince or c - state.cacheSince > 300 or (state.cacheDirtyUntil and c < state.cacheDirtyUntil)) then
 			state.edgeCache, state.signalCache, state.lineCache, state.cacheSince = {}, {}, {}, c
+			resetTrains()
 		end
 		built = true
 		local staticChanged = buildStatic()
-		local braking = buildBraking(0)
-		if staticChanged or #braking > 0 or selectionChanged or state.hadBraking then
-			publish(braking)
+		-- the bars: nil if unchanged; none once no train is selected
+		local bars
+		if next(state.selected) ~= nil then
+			bars = buildBars(0)
+		elseif #state.bars > 0 then
+			bars, state.barsKey = {}, nil
 		end
-		state.hadBraking = #braking > 0
+		if bars then state.bars = bars end
+		if staticChanged or bars or selectionChanged then publish() end
 	end)
 	if TIMING then noteTiming(started, built) end
 	if not ok then
