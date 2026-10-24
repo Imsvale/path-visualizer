@@ -11,13 +11,14 @@ function data()
 	a("Window!imsvale-pathvis-settings", {
 		anchorPoint = { 0.0, 0.0 },
 	})
-	-- a small title (the window style itself is the engine's; its title is the one thing the
-	-- game's stylesheets touch)
-	a("Window!imsvale-pathvis-settings Window::Title", {
-		fontSize = 14,
+	-- No title bar: hidden the way the game hides it (construction menu window, line manager
+	-- popover, full-screen windows: Window::TitleBar, visibility "none"). A smaller title font
+	-- didn't take (fontSize on Window::Title), and the window's compact mode broke its frame.
+	a("Window!imsvale-pathvis-settings Window::TitleBar", {
+		visibility = "none",
 	})
 	a("Window!imsvale-pathvis-settings Window::Content", {
-		padding = { 2, 14, 10, 14 },
+		padding = { 10, 14, 10, 14 },
 	})
 	-- a little space between the rows
 	a("Window!imsvale-pathvis-settings CheckBox", {
