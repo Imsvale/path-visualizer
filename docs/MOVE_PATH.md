@@ -2,6 +2,8 @@
 
 Findings from `tools/probe_train_path.lua`. "Confirmed" means seen in probe output; the rest are working guesses.
 
+Terms (user, 2026-10-24; also in the README and code): a **leg** is a train's way to its next stop. Its **path** is the game's `path.edges` for that leg, one track edge after another (it tells parallel tracks apart). The **reservation** is the part of the path the train has claimed. "Route" is avoided: players use it for whole lines.
+
 The script-doc's `MovePath` record is out of date: it lists `servedFrom`, `servedTo` and `reverse`, which are nil, and lacks `reservedFrom` / `reservedTo`, which exist (the doc's `Ship` record has fields of those names). The console's echo of `api.engine.getComponent(543, api.type.ComponentType.MOVE_PATH)` lists every field (2026-10-24), so this is the full set:
 
 ```

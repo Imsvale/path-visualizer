@@ -1,12 +1,17 @@
--- The trains' reserved paths as lines, with a bar across the track where each reservation ends.
+-- The trains' reservations as lines, with a bar across the track where each one ends.
 --
--- From each train's MOVE_PATH (docs/MOVE_PATH.md): the reservation is path.edges
--- [reservedFrom, reservedTo), released behind the train edge by edge; drawn from the train's
--- front edge on. Line colour: whether the train is waiting for a free path (it failed to
--- extend its reservation). End bar: red where the reservation is held short of the path's
--- end (at a signal, or by another train), white at the end of the path. Selected trains (an
--- open entity window) get wider lines with a white outline and, if switched on, bars where
--- they would stop braking now (normally and in an emergency stop).
+-- Terms (as in the README): the leg is the train's way to its next stop; the game's path for
+-- it is MOVE_PATH path.edges, which ends at the far end of the platform where the train
+-- reverses there, and runs on past the stop to the next signal where its line continues
+-- (docs/MOVE_PATH.md). The reservation is the part of that path the train has claimed,
+-- path.edges [reservedFrom, reservedTo), released behind the train edge by edge; drawn from
+-- the train's front edge on.
+-- Line colour: whether the train is waiting for a free path (it tried to extend its
+-- reservation and was refused). End bar: white where the reservation reaches the end of the
+-- leg's path (at or beyond the stop), red where it ends short of it (at a signal, or another
+-- train's reservation; the train needn't be trying for more yet). Selected trains (an open
+-- entity window) get wider lines with a white outline and, if switched on, bars where they
+-- would stop braking now (normally and in an emergency stop).
 --
 -- A 3D overlay only renders inside the active action's ActionDescriptor (network-wireframe,
 -- parallelism), so path_visualizer_replace.script.lua puts these lines into every
@@ -183,7 +188,8 @@ local function isSelected(train)
 	return visible
 end
 
--- One train's reservation ahead of it, or nil: its edge ids and what ends it.
+-- One train's reservation ahead of it, or nil: its edge ids, and whether it reaches the end of
+-- the leg's path.
 local function readTrain(train)
 	local mp = api.engine.getComponent(train, api.type.ComponentType.MOVE_PATH)
 	if not mp or not mp.reservedTo then return nil end
@@ -195,9 +201,9 @@ local function readTrain(train)
 	for i = from, to - 1 do
 		ids[#ids + 1] = mp.path.edges[i + 1].edgeId
 	end
-	-- the edge after the end, to find where the end is. A reservation ending short of the path's
-	-- end is held (at a signal, or by another train's reservation): never at a green signal, as
-	-- a signal only turns green once a reservation runs past it.
+	-- the edge after the end, to find where the end is. A reservation ending short of the leg's
+	-- path is held (at a signal, or by another train's reservation): never at a green signal,
+	-- as a signal only turns green once a reservation runs past it.
 	local nextId, endKind = nil, "end"
 	if to < n then
 		nextId = mp.path.edges[to + 1].edgeId

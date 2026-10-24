@@ -1,6 +1,8 @@
--- Reservation logger: watches every train's MOVE_PATH and logs a line whenever its reservation end
--- (reservedTo), its path or its waiting-for-free-path flag changes. reservedFrom alone isn't logged: it
--- follows the train's rear edge by edge. Findings so far: docs/MOVE_PATH.md.
+-- Reservation logger: watches every train's MOVE_PATH and logs a line whenever the end of its
+-- reservation (reservedTo), its path (a new one for each leg, and at a stop) or its
+-- waiting-for-free-path flag changes. reservedFrom alone isn't logged: it follows the train's
+-- rear edge by edge. "path end" in a line: the reservation reaches the end of the leg's path.
+-- Findings so far: docs/MOVE_PATH.md.
 
 -- dev switch reservationLog (scripts/path_visualizer_dev.lua): off in a release
 local devOk, dev = pcall(ug_require, "/scripts/path_visualizer_dev.lua")
