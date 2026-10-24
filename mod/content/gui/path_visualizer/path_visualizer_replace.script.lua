@@ -12,7 +12,7 @@
 -- it was installed (_react.recipeReplace[id], another mod's wrapper), and only where that's
 -- empty the game's original (_react.originalRecipeFn[id]). Calling the original directly (as
 -- react.CallOriginalRecipe does) would drop a wrapper installed before ours. See
--- ../docs/GUI.md, "Replacing recipes".
+-- the mods folder's docs/COMPATIBILITY.md.
 -- Installed early (order -1000 in the .res.lua), so ours is the innermost wrapper: a mod
 -- chaining onto it runs first, and an EdgeRenderable it adds passes through our
 -- EdgeRenderable wrapper before our descriptor wrapper decides, so there's never a second one.
