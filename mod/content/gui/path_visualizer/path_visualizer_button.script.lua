@@ -62,6 +62,7 @@ local function openSettings(pos)
 		x = pos.x,
 		y = pos.y,
 		windowTitle = _("Path Visualizer"),
+		windowClass = "imsvale-pathvis-settings",
 		recipe = Settings,
 		params = {},
 		compact = true,
@@ -78,8 +79,12 @@ local Button = react.RegisterPluginRecipe(main_mod_button_area.MainModButtonArea
 			if popoverOpen then
 				closeSettings()
 			else
+				-- below the button's lower left corner
 				local pos = { x = 0, y = 0 }
-				pcall(function() pos = selfRef:get():getPosition(0.0, 1.0) end)
+				pcall(function()
+					local p = selfRef:get():getPosition(0.0, 1.0)
+					pos = { x = p.x, y = p.y + 4 }
+				end)
 				openSettings(pos)
 			end
 			return true

@@ -22,7 +22,7 @@ local MAX_EDGES = 4000
 local WIDTH = 0.6
 local WIDTH_SELECTED = 1.2
 local BAR = 1.25 -- half length of the bars across the track (metres)
-local BAR_WIDTH = 0.6
+local BAR_WIDTH = 0.3
 
 local function v2(x, y) return api.type.Vec2f.new(x, y) end
 local function v4(c) return api.type.Vec4f.new(c[1], c[2], c[3], c[4]) end
@@ -259,15 +259,17 @@ local function pathPoint(mp, networks, i, rem)
 end
 
 -- For each selected train: a bar at its pathPos, and, if switched on, one where it would
--- stop if it started braking now (v² / 2a ahead of its front).
-local function buildBraking()
+-- stop if it started braking now (v² / 2a ahead of its front). Both moved on by speed ×
+-- `elapsed` seconds of game time since the last step, so they move smoothly in between.
+local function buildBraking(elapsed)
 	local lines = {}
 	for train in pairs(state.selected) do
 		pcall(function()
 			local mp = api.engine.getComponent(train, api.type.ComponentType.MOVE_PATH)
 			local pp = mp.dyn.pathPos
+			local pos = pp.pos + mp.dyn.speed * elapsed
 			local networks = {}
-			local g, t = pathPoint(mp, networks, pp.edgeIndex, pp.pos)
+			local g, t = pathPoint(mp, networks, pp.edgeIndex, pos)
 			if g then addBar(lines, g, t, COLOR_PATHPOS, BAR_WIDTH) end
 			if not state.braking then return end
 			local d = vehicleData(train)
@@ -276,7 +278,7 @@ local function buildBraking()
 				return
 			end
 			local v = mp.dyn.speed
-			g, t = pathPoint(mp, networks, pp.edgeIndex, pp.pos + d.front + v * v / (2 * d.brake))
+			g, t = pathPoint(mp, networks, pp.edgeIndex, pos + d.front + v * v / (2 * d.brake))
 			if g then addBar(lines, g, t, COLOR_BRAKING, BAR_WIDTH) end
 		end)
 	end
@@ -327,18 +329,44 @@ function overlay.setBraking(on)
 	overlay.poll()
 end
 
+local function clock()
+	local ok, c = pcall(os.clock)
+	return ok and c or nil
+end
+
+-- Seconds of game time since the last step, from the real clock and how fast game time ran
+-- over the last step (game speed); at most one step, so nothing runs on while paused.
+local function sinceStep()
+	local c = clock()
+	if not c or not state.stepClock or not state.gameRate then return 0 end
+	return math.min((c - state.stepClock) * state.gameRate, state.stepLength or 0)
+end
+
+local function noteStep(now)
+	local c = clock()
+	if c and state.time and state.stepClock and c > state.stepClock then
+		state.stepLength = (now - state.time) / 1000
+		state.gameRate = state.stepLength / (c - state.stepClock)
+	end
+	state.stepClock = c
+end
+
 -- Reads the trains once per game time step (time stands still while paused), and when the
--- selection changes.
+-- selection changes. In between, only the selected trains' bars are moved on.
 function overlay.poll()
 	if state.failed or not state.on then return end
 	local ok, err = pcall(function()
 		local selectionChanged = updateSelection()
 		local now = gameTime()
-		if now == state.time and not selectionChanged then return end
+		if now == state.time and not selectionChanged then
+			if next(state.selected) ~= nil then publish(buildBraking(sinceStep())) end
+			return
+		end
+		if now ~= state.time then noteStep(now) end
 		state.time = now
 		if selectionChanged then state.signature = nil end
 		local staticChanged = buildStatic()
-		local braking = buildBraking()
+		local braking = buildBraking(0)
 		if staticChanged or #braking > 0 or selectionChanged or state.hadBraking then
 			publish(braking)
 		end
