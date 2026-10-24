@@ -3,7 +3,7 @@
 -- click outside or Escape).
 --
 -- The mod button area passes its plugins no game context; the window container comes from
--- the game's global gameGlobals (gui/main/game.tl sets it).
+-- gui/main/game_react_globals.tl (the global gameGlobals behind it isn't visible to mods).
 
 local react = ug_require "::/gui/main/react.lua"
 local builtin = ug_require "::/gui/main/builtin.lua"
@@ -17,7 +17,11 @@ end
 
 local function windowApi()
 	local wc
-	pcall(function() wc = gameGlobals.windowContainer:get():getApi() end)
+	local ok, err = pcall(function()
+		local globals = ug_require "::/gui/main/game_react_globals.tl"
+		wc = globals.getDefaultWindowContainer():get():getApi()
+	end)
+	if not ok then log("window container: " .. tostring(err)) end
 	return wc
 end
 

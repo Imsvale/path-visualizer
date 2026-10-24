@@ -21,7 +21,8 @@ local overlay = {}
 local MAX_EDGES = 4000
 local WIDTH = 0.6
 local WIDTH_SELECTED = 1.2
-local BAR = 2.5 -- half length of the bars across the track (metres)
+local BAR = 1.25 -- half length of the bars across the track (metres)
+local BAR_WIDTH = 0.6
 
 local function v2(x, y) return api.type.Vec2f.new(x, y) end
 local function v4(c) return api.type.Vec4f.new(c[1], c[2], c[3], c[4]) end
@@ -32,11 +33,12 @@ local COLOR_RED = { 1.0, 0.15, 0.15, 1.0 }
 local COLOR_GREEN = { 0.2, 1.0, 0.3, 1.0 }
 local COLOR_PATH_END = { 1.0, 1.0, 1.0, 1.0 }
 local COLOR_BRAKING = { 1.0, 0.9, 0.1, 1.0 }
+local COLOR_PATHPOS = { 1.0, 0.2, 1.0, 1.0 }
 
 local state = {
 	-- settings, per session: the HUD button (path_visualizer_button.script.lua) and its popover
 	on = true,
-	braking = false,
+	braking = true,
 
 	version = 0,
 	lines = nil, -- what the EdgeRenderable gets: the static lines plus the braking bars
@@ -209,7 +211,7 @@ local function buildStatic()
 			local prev = #t.ids > 1 and geometryOf(networks, t.ids[#t.ids - 1]) or geometryOf(networks, t.prevId)
 			local fw = forward(prev, last, geometryOf(networks, t.nextId))
 			local endColor = t.endKind == "green" and COLOR_GREEN or t.endKind == "end" and COLOR_PATH_END or COLOR_RED
-			addBar(lines, last, fw and 1 or 0, endColor, width * 1.5)
+			addBar(lines, last, fw and 1 or 0, endColor, BAR_WIDTH)
 		end
 	end
 	state.static = lines
@@ -238,35 +240,44 @@ local function vehicleData(train)
 	return d or nil
 end
 
--- Where each selected train would stop if it started braking now: a bar v² / 2a ahead of
--- its front.
+-- The point `rem` metres along the path from the start of edge i (walking on into the
+-- following edges, clamped to the path's end): its geometry and parameter t.
+local function pathPoint(mp, networks, i, rem)
+	local n = #mp.path.edges
+	local g = geometryOf(networks, mp.path.edges[i + 1].edgeId)
+	while g and rem > g.length and i < n - 1 do
+		rem = rem - g.length
+		i = i + 1
+		g = geometryOf(networks, mp.path.edges[i + 1].edgeId)
+	end
+	if not g or g.length < 0.1 then return nil end
+	local prev = i > 0 and geometryOf(networks, mp.path.edges[i].edgeId) or nil
+	local next = i < n - 1 and geometryOf(networks, mp.path.edges[i + 2].edgeId) or nil
+	local t = math.min(1, math.max(0, rem / g.length))
+	if not forward(prev, g, next) then t = 1 - t end
+	return g, t
+end
+
+-- For each selected train: a bar at its pathPos, and, if switched on, one where it would
+-- stop if it started braking now (v² / 2a ahead of its front).
 local function buildBraking()
 	local lines = {}
-	if not state.braking then return lines end
 	for train in pairs(state.selected) do
 		pcall(function()
+			local mp = api.engine.getComponent(train, api.type.ComponentType.MOVE_PATH)
+			local pp = mp.dyn.pathPos
+			local networks = {}
+			local g, t = pathPoint(mp, networks, pp.edgeIndex, pp.pos)
+			if g then addBar(lines, g, t, COLOR_PATHPOS, BAR_WIDTH) end
+			if not state.braking then return end
 			local d = vehicleData(train)
 			if not d then
 				logOnce("nodata" .. tostring(train), "no brake deceleration for train " .. tostring(train))
 				return
 			end
-			local mp = api.engine.getComponent(train, api.type.ComponentType.MOVE_PATH)
-			local n = #mp.path.edges
 			local v = mp.dyn.speed
-			local networks = {}
-			local i, rem = mp.dyn.pathPos.edgeIndex, mp.dyn.pathPos.pos + d.front + v * v / (2 * d.brake)
-			local g = geometryOf(networks, mp.path.edges[i + 1].edgeId)
-			while g and rem > g.length and i < n - 1 do
-				rem = rem - g.length
-				i = i + 1
-				g = geometryOf(networks, mp.path.edges[i + 1].edgeId)
-			end
-			if not g or g.length < 0.1 then return end
-			local prev = i > 0 and geometryOf(networks, mp.path.edges[i].edgeId) or nil
-			local next = i < n - 1 and geometryOf(networks, mp.path.edges[i + 2].edgeId) or nil
-			local t = math.min(1, math.max(0, rem / g.length))
-			if not forward(prev, g, next) then t = 1 - t end
-			addBar(lines, g, t, COLOR_BRAKING, WIDTH_SELECTED * 1.5)
+			g, t = pathPoint(mp, networks, pp.edgeIndex, pp.pos + d.front + v * v / (2 * d.brake))
+			if g then addBar(lines, g, t, COLOR_BRAKING, BAR_WIDTH) end
 		end)
 	end
 	return lines
