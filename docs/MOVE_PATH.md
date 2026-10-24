@@ -35,7 +35,8 @@ reservedFrom, reservedTo, occupiedBackIndex, occupiedFrontIndex
 - Arriving: path of 83 edges, the train braking with `occupied` 60..81 and reserved 60..83.
 - At the platform: `TRANSPORT_VEHICLE.state` 2 (1 en route), `MovePath.state` 3 (0 en route), `approachingStation` false, and a new short path of 20 edges (the platform track) with reserved 0..20, all of it.
 - Departing: a new path of 86 edges starting at the platform, `stopIndex` advanced, reserved 0..29 before the train had moved.
-- To test (user): a through station shared by two lines that overlap there. If a reservation ends at the end of a train's path, a train of line B coming from the west could enter the platform as soon as a train of line A leaving eastward has cleared it.
+- Through station shared by two lines, confirmed (2026-10-24). Stations A, B, C from west to east, no signals anywhere; train 1328 runs A–B and back, train 1329 C–B and back, so they overlap only at B. 1328, turning at A, got a new path through to the eastern end of B's platform track. Without signals that whole path is one section: while 1329 stood at B, 1328 held only its own edges plus the next (waiting for a free path, reservation ending at an edge with no signal). It got the entire path, to its end, at once, 15.8 s after 1329 left B eastward: when 1329's rear passed the eastern end of B (seen in the overlay, user). So a reservation that ends at the end of the path needs the leading train only to clear that platform, not to pass a signal beyond it.
+- A reservation can end at an edge with no signal: a train that can't reserve its next section holds what it occupies plus one edge.
 
 ## Path
 
