@@ -80,6 +80,7 @@ local state = {
 	edgeCache = {}, -- track entity -> its edges (entityEdges)
 	signalCache = {}, -- edge and direction -> whether a signal faces that way (hasSignal)
 	cacheSince = nil, -- clock() when the caches were last cleared
+	cacheDirtyUntil = nil, -- clock() until which they're cleared on every build (after a build)
 	timing = { polls = 0, builds = 0, total = 0, max = 0, since = nil }, -- dev timing log
 }
 
@@ -189,8 +190,8 @@ local function nodeKey(id) return id.entity .. ":" .. id.index end
 -- Every edge of a track entity's TRANSPORT_NETWORK, read once and cached: { geometry, nodes =
 -- the node keys of its two ends (Edge.conns) }, by edge index + 1; false if none. Reading
 -- tn.edges per edge was most of the overlay's time (copying a station's whole edge list for
--- each of its edges, 2026-10-24). The network rarely changes: overlay.poll clears the cache
--- every minute, so new and removed track is picked up.
+-- each of its edges, 2026-10-24). The network only changes with builds: overlay.poll clears
+-- the cache after one (and every 5 minutes as a fallback).
 local function entityEdges(entity)
 	local cached = state.edgeCache[entity]
 	if cached ~= nil then return cached end
@@ -614,9 +615,11 @@ function overlay.poll()
 		end
 		state.time = now
 		if selectionChanged then state.signature = nil end
-		-- the network caches, cleared every minute (new and removed track, signals)
+		-- the network caches: cleared after a build (onProposalApply, see subscribe; for 2 s, in
+		-- case the engine applies it a little later), and every 5 minutes for builds made by
+		-- script, which may not fire the event (e.g. Parallelism's extra tracks)
 		local c = clock()
-		if c and (not state.cacheSince or c - state.cacheSince > 60) then
+		if c and (not state.cacheSince or c - state.cacheSince > 300 or (state.cacheDirtyUntil and c < state.cacheDirtyUntil)) then
 			state.edgeCache, state.signalCache, state.cacheSince = {}, {}, c
 		end
 		built = true
@@ -640,6 +643,11 @@ end
 -- step and redraws the action when the lines changed. Hooks are called unconditionally so
 -- the recipe's hook order stays stable.
 function overlay.subscribe()
+	-- a build was applied (fired by the engine: track, signals, bulldozer, construction tools)
+	react.onEvent("onProposalApply", function()
+		local c = clock()
+		if c then state.cacheDirtyUntil = c + 2 end
+	end)
 	local seen = react.useState(state.version)
 	react.onStep(function()
 		overlay.poll()
