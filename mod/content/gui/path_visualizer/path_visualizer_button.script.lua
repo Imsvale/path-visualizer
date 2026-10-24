@@ -2,10 +2,8 @@
 -- opens the settings, a window right under the button that closes on a click outside it or
 -- Escape (as the game's popovers do).
 --
--- The settings window is an ordinary builtin.Window with rows from the game's own
--- script_param_util.buildScriptParamComp (label and segmented buttons, as the construction
--- menu's settings; the map editor builds its Yes / No rows the same way). The game's
--- PopoverWindow, used at first, is styled as a bare box (classes popover, no-close-button).
+-- The settings window is an ordinary builtin.Window (the game's PopoverWindow, used at first,
+-- is styled as a bare box by its class popover) holding a checkbox per setting.
 --
 -- The mod button area passes its plugins no game context; the window container comes from
 -- gui/main/game_react_globals.tl (the global gameGlobals behind it isn't visible to mods).
@@ -13,7 +11,6 @@
 local react = ug_require "::/gui/main/react.lua"
 local builtin = ug_require "::/gui/main/builtin.lua"
 local main_mod_button_area = ug_require "::/gui/main/main_mod_button_area.tl"
-local script_param_util = ug_require "::/gui/main/script_param_util.tl"
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 local overlay = ug_require "imsvale_path_visualizer::/gui/path_visualizer/path_visualizer_overlay.lua"
 
@@ -41,20 +38,17 @@ local function swatch(color)
 	}
 end
 
--- A No / Yes row as in the construction menu's settings, with its overlay colour in front.
+-- A checkbox with its overlay colour in front.
 local function settingRow(label, on, color, set)
-	local param = api.type.ScriptParam.new()
-	param.name = label
-	param.uiType = api.type["enum"].ScriptParamType.Button
-	param.values = { _("No"), _("Yes") }
-	param.defaultIndex = on and 2 or 1
 	return builtin.BoxLayout{
 		orientation = builtin.type.Orientation.Horizontal,
 		children = {
 			swatch(color),
-			script_param_util.buildScriptParamComp(param, param.defaultIndex, function(index)
-				set(index == 2)
-			end),
+			builtin.CheckBox{
+				label = label,
+				initialValue = on and 1 or 0,
+				onValueChange = function(value) set(value == 1) end,
+			},
 		},
 	}
 end
@@ -79,11 +73,13 @@ local SettingsContent = react.RegisterRecipe("ImsvalePathVisualizerSettingsConte
 end)
 
 local SettingsWindow = react.RegisterWrapperRecipe("ImsvalePathVisualizerSettingsWindow", builtin.Window, function(params)
+	-- no title bar (compact, no title), and no-close-button: as the game's popovers, so the
+	-- frame doesn't cut its top right corner for a close button
 	return builtin.Window{
-		meta = { class = "imsvale-pathvis-settings" },
-		title = _("Settings"),
+		meta = { class = "no-close-button, imsvale-pathvis-settings" },
 		closable = false,
 		movable = false,
+		compact = true,
 		initialX = params.x,
 		initialY = params.y,
 		onClose = params.onClose,
