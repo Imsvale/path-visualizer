@@ -77,7 +77,6 @@ local state = {
 	failed = false,
 	logged = {},
 	sectionInfo = {}, -- dev log: train -> the next section's verdict
-	rail = {}, -- land vehicle -> whether it's a train
 	timing = { polls = 0, builds = 0, total = 0, max = 0, since = nil }, -- dev timing log
 }
 
@@ -284,24 +283,13 @@ local function sectionTaken(t, heldEdges, heldNodes, networks)
 	return false
 end
 
--- landVehicleMoveSystem.forEach goes over every land vehicle, buses and trucks too (379 in an
--- organic save, most of them road vehicles: the overlay walked all their paths and lagged the
--- game, 2026-10-24). Trains only: carrier RAIL, looked up once per vehicle.
+-- The trains. (landVehicleMoveSystem.forEach goes over every land vehicle, buses and trucks
+-- too: in an organic save the overlay walked all their paths and lagged the game, 2026-10-24.)
 local function railVehicles()
-	local rail, list = {}, {}
-	local RAIL = api.type.enum.Carrier.RAIL
-	api.engine.system.landVehicleMoveSystem.forEach(function(e)
-		local isRail = state.rail[e]
-		if isRail == nil then
-			isRail = false
-			pcall(function()
-				isRail = api.engine.getComponent(e, api.type.ComponentType.TRANSPORT_VEHICLE).carrier == RAIL
-			end)
-		end
-		rail[e] = isRail
-		if isRail then list[#list + 1] = e end
-	end)
-	state.rail = rail -- vehicles gone are dropped
+	local list = {}
+	for _, e in ipairs(api.engine.util.vehicle.getVehiclesByCarrier(api.type.enum.Carrier.RAIL)) do
+		list[#list + 1] = e
+	end
 	return list
 end
 

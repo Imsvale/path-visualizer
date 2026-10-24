@@ -16,7 +16,7 @@ reservedFrom, reservedTo, occupiedBackIndex, occupiedFrontIndex
 
 ## Which vehicles
 
-`landVehicleMoveSystem.forEach` goes over every land vehicle, not only trains as its doc says: in an organic save it gave 379 vehicles, most of them road vehicles (MOVE_PATH too, reservation `[0, 0)`). Trains: `TRANSPORT_VEHICLE.carrier == api.type.enum.Carrier.RAIL` (2026-10-24).
+`landVehicleMoveSystem.forEach` goes over every land vehicle, not only trains as its doc says: in an organic save it gave 379 vehicles, most of them road vehicles (MOVE_PATH too, reservation `[0, 0)`). The trains directly: `api.engine.util.vehicle.getVehiclesByCarrier(api.type.enum.Carrier.RAIL)` (as the game's mission scripts do; 2026-10-24).
 
 ## Reservation
 
