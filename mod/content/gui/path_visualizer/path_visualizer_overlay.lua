@@ -7,9 +7,10 @@
 -- path.edges [reservedFrom, reservedTo), released behind the train edge by edge; drawn from
 -- the train's front edge on.
 -- Line colour: whether the train is waiting for a free path (it tried to extend its
--- reservation and was refused). A white bar marks where the reservation ends. (It was red
--- where it ended short of the leg's path, white at its end: dropped as more confusing than
--- useful, user 2026-10-24.) Selected trains (an open entity window) get wider lines with a
+-- reservation and was refused). A bar marks where the reservation ends, coloured by the next
+-- section beyond it (to the next signal facing the train): white if it's free, red if another
+-- train holds an edge of it or a node inside it, grey where the reservation already reaches
+-- the end of the leg's path (the next leg's path doesn't exist yet). Selected trains (an open entity window) get wider lines with a
 -- white outline and, if switched on, bars where they would stop braking now (normally and in
 -- an emergency stop).
 --
@@ -35,7 +36,9 @@ local function v4(c) return api.type.Vec4f.new(c[1], c[2], c[3], c[4]) end
 
 local COLOR_PATH = { 0.2, 0.85, 1.0, 0.75 }
 local COLOR_WAITING = { 1.0, 0.6, 0.1, 0.75 }
-local COLOR_END = { 1.0, 1.0, 1.0, 1.0 }
+local COLOR_END_FREE = { 1.0, 1.0, 1.0, 1.0 }
+local COLOR_END_TAKEN = { 1.0, 0.15, 0.15, 1.0 }
+local COLOR_END_LEG = { 0.6, 0.6, 0.6, 1.0 }
 local COLOR_BRAKING = { 1.0, 0.9, 0.1, 1.0 }
 local COLOR_PATHPOS = { 1.0, 0.2, 1.0, 1.0 }
 local COLOR_EMERGENCY = { 0.6, 0.45, 1.0, 1.0 }
@@ -72,6 +75,7 @@ local state = {
 	vehicleData = {}, -- train -> { brake = deceleration, front = metres ahead of pathPos }
 	failed = false,
 	logged = {},
+	sectionInfo = {}, -- dev log: train -> the next section's verdict
 }
 
 local function log(msg)
@@ -187,28 +191,94 @@ local function isSelected(train)
 	return visible
 end
 
--- One train's reservation ahead of it, or nil: its edge ids.
+local function edgeKey(id) return id.entity .. ":" .. id.index end
+local function nodeKey(id) return id.entity .. ":" .. id.index end
+
+-- The track edge behind an EdgeId (its conns are its two nodes), with the TRANSPORT_NETWORK
+-- components cached in networks.
+local function laneOf(networks, id)
+	local tn = networks[id.entity]
+	if tn == nil then
+		tn = api.engine.getComponent(id.entity, api.type.ComponentType.TRANSPORT_NETWORK) or false
+		networks[id.entity] = tn
+	end
+	return tn and tn.edges[id.index + 1]
+end
+
+-- The node keys of a track edge's two ends (Edge.conns), or none if they can't be read (so
+-- that only the node check is lost, not the overlay).
+local function nodesOf(networks, id)
+	local keys = {}
+	pcall(function()
+		local lane = laneOf(networks, id)
+		if not lane then return end
+		for _, node in ipairs(lane.conns) do keys[#keys + 1] = nodeKey(node) end
+	end)
+	return keys
+end
+
+-- One train's reservation, or nil: the edges it holds, the ones ahead of its front (drawn),
+-- and the next section beyond the reservation: from its end to the next signal facing the
+-- train (the signal's edge is the first one past it) or the end of the leg's path.
 local function readTrain(train)
 	local mp = api.engine.getComponent(train, api.type.ComponentType.MOVE_PATH)
 	if not mp or not mp.reservedTo then return nil end
-	local n = #mp.path.edges
-	local from = math.max(mp.occupiedFrontIndex, mp.reservedFrom, 0)
+	local edges = mp.path.edges
+	local n = #edges
 	local to = math.min(mp.reservedTo, n)
-	if to <= from then return nil end
-	local ids = {}
-	for i = from, to - 1 do
-		ids[#ids + 1] = mp.path.edges[i + 1].edgeId
+	local from = math.max(mp.occupiedFrontIndex, mp.reservedFrom, 0)
+	local held, ids = {}, {}
+	for i = math.max(mp.reservedFrom, 0), to - 1 do
+		held[#held + 1] = edges[i + 1].edgeId
+		if i >= from then ids[#ids + 1] = edges[i + 1].edgeId end
+	end
+	local section = {}
+	for i = to, n - 1 do
+		local e = edges[i + 1]
+		if i > to then
+			local sid = api.engine.system.signalSystem.getSignal(e.edgeId, e.dir)
+			if sid and sid.entity >= 0 then break end
+		end
+		section[#section + 1] = e.edgeId
 	end
 	local selected = state.selected[train] == true
 	return {
+		train = train,
+		held = held,
 		ids = ids,
+		section = section,
+		atLegEnd = to >= n,
 		-- the edges either side, to find which end of the last edge the reservation ends at
-		prevId = from > 0 and mp.path.edges[from].edgeId or nil,
-		nextId = to < n and mp.path.edges[to + 1].edgeId or nil,
+		prevId = from > 0 and edges[from].edgeId or nil,
+		nextId = to < n and edges[to + 1].edgeId or nil,
 		selected = selected,
 		waiting = api.engine.system.landVehicleMoveSystem.isTrainWaitingForFreePath(train),
-		key = string.format("%s:%d:%d:%d:%d:%s", tostring(train), n, from, to, ids[1].entity, tostring(selected)),
+		key = string.format("%s:%d:%d:%d:%d:%s", tostring(train), n, from, to,
+			ids[1] and ids[1].entity or -1, tostring(selected)),
 	}
+end
+
+-- Whether another train holds the section ahead of t: one of its edges, or a node inside it
+-- (shared by two of its edges: a switch, or a crossing, where tracks meet without sharing an
+-- edge). The section's two end nodes don't count: a train right behind it or just past it
+-- touches them without being in the way.
+local function sectionTaken(t, heldEdges, heldNodes, networks)
+	local count = {}
+	for _, id in ipairs(t.section) do
+		local owner = heldEdges[edgeKey(id)]
+		if owner and owner ~= t.train then return true end
+		for _, k in ipairs(nodesOf(networks, id)) do
+			count[k] = (count[k] or 0) + 1
+		end
+	end
+	for k, c in pairs(count) do
+		if c >= 2 then
+			for owner in pairs(heldNodes[k] or {}) do
+				if owner ~= t.train then return true end
+			end
+		end
+	end
+	return false
 end
 
 local function buildStatic()
@@ -216,17 +286,35 @@ local function buildStatic()
 	api.engine.system.landVehicleMoveSystem.forEach(function(train)
 		entities[#entities + 1] = train
 		local t = readTrain(train)
-		if t then
-			trains[#trains + 1] = t
-			parts[#parts + 1] = t.key .. ":" .. tostring(t.waiting)
-		end
+		if t then trains[#trains + 1] = t end
 	end)
 	state.trains = entities
+
+	-- who holds which edge and node
+	local networks, heldEdges, heldNodes = {}, {}, {}
+	for _, t in ipairs(trains) do
+		for _, id in ipairs(t.held) do
+			heldEdges[edgeKey(id)] = t.train
+			for _, k in ipairs(nodesOf(networks, id)) do
+				heldNodes[k] = heldNodes[k] or {}
+				heldNodes[k][t.train] = true
+			end
+		end
+	end
+	for _, t in ipairs(trains) do
+		t.endKind = t.atLegEnd and "leg" or sectionTaken(t, heldEdges, heldNodes, networks) and "taken" or "free"
+		parts[#parts + 1] = t.key .. ":" .. tostring(t.waiting) .. ":" .. t.endKind
+		if LOG_SELECTED and t.selected then
+			local nodes = t.section[1] and #nodesOf(networks, t.section[1]) or 0
+			state.sectionInfo[t.train] = string.format("next section: %s, %d edges (nodes read per edge: %d)", t.endKind, #t.section, nodes)
+		end
+	end
+
 	local signature = table.concat(parts, "|")
 	if signature == state.signature then return false end
 	state.signature = signature
 
-	local networks, lines = {}, {}
+	local lines = {}
 	for _, t in ipairs(trains) do
 		local color = t.waiting and COLOR_WAITING or COLOR_PATH
 		local width = t.selected and WIDTH_SELECTED or WIDTH
@@ -244,7 +332,8 @@ local function buildStatic()
 		if last and #lines < MAX_EDGES then
 			local prev = #t.ids > 1 and geometryOf(networks, t.ids[#t.ids - 1]) or geometryOf(networks, t.prevId)
 			local fw = forward(prev, last, geometryOf(networks, t.nextId))
-			addBar(lines, last, fw and 1 or 0, COLOR_END, BAR_WIDTH)
+			local endColor = t.endKind == "leg" and COLOR_END_LEG or t.endKind == "taken" and COLOR_END_TAKEN or COLOR_END_FREE
+			addBar(lines, last, fw and 1 or 0, endColor, BAR_WIDTH)
 		end
 	end
 	state.static = lines
@@ -444,9 +533,10 @@ function overlay.poll()
 					pcall(function()
 						local mp = api.engine.getComponent(train, api.type.ComponentType.MOVE_PATH)
 						local dyn = mp.dyn
-						log(string.format("sel t=%.1f train=%s n=%d P=%d@%.2f v=%.3f a=%.3f b=%.3f standing=%.1f untilAccel=%.2f state=%s",
+						log(string.format("sel t=%.1f train=%s n=%d P=%d@%.2f v=%.3f a=%.3f b=%.3f standing=%.1f untilAccel=%.2f state=%s | %s",
 							now / 1000, tostring(train), #mp.path.edges, dyn.pathPos.edgeIndex, dyn.pathPos.pos, dyn.speed,
-							dyn.accel, dyn.brakeDecel, dyn.timeStanding, dyn.timeUntilAccel, tostring(mp.state)))
+							dyn.accel, dyn.brakeDecel, dyn.timeStanding, dyn.timeUntilAccel, tostring(mp.state),
+							state.sectionInfo[train] or "-"))
 					end)
 				end
 			end
