@@ -73,13 +73,16 @@ local SettingsContent = react.RegisterRecipe("ImsvalePathVisualizerSettingsConte
 end)
 
 local SettingsWindow = react.RegisterWrapperRecipe("ImsvalePathVisualizerSettingsWindow", builtin.Window, function(params)
-	-- no title bar (compact, no title), and no-close-button: as the game's popovers, so the
-	-- frame doesn't cut its top right corner for a close button
+	-- no-close-button: the game's rule for it hides the close button and with it the notch it
+	-- cut in the frame's top right corner (Window!no-close-button Window::TitleLayout
+	-- Button!close, builtin.css.lua). Not compact: that dropped the title bar but shifted the
+	-- drop shadow and darkened a band of the background (2026-10-24); the title is made small
+	-- in the stylesheet instead.
 	return builtin.Window{
 		meta = { class = "no-close-button, imsvale-pathvis-settings" },
+		title = _("Settings"),
 		closable = false,
 		movable = false,
-		compact = true,
 		initialX = params.x,
 		initialY = params.y,
 		onClose = params.onClose,

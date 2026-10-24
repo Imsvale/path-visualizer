@@ -11,9 +11,13 @@ function data()
 	a("Window!imsvale-pathvis-settings", {
 		anchorPoint = { 0.0, 0.0 },
 	})
-	-- no title bar (compact): even padding all round
+	-- a small title (the window style itself is the engine's; its title is the one thing the
+	-- game's stylesheets touch)
+	a("Window!imsvale-pathvis-settings Window::Title", {
+		fontSize = 14,
+	})
 	a("Window!imsvale-pathvis-settings Window::Content", {
-		padding = { 10, 14, 10, 14 },
+		padding = { 2, 14, 10, 14 },
 	})
 	-- a little space between the rows
 	a("Window!imsvale-pathvis-settings CheckBox", {
