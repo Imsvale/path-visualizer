@@ -268,8 +268,11 @@ local function pathPoint(mp, networks, i, rem)
 end
 
 -- Distance and speed after `dt` seconds from speed v at acceleration a, not going backwards
--- (a braking train stops).
+-- (a braking train stops). A train standing still stays put: standing at a platform its
+-- acceleration reads +1.53 the whole stop (2026-10-24), which made the bars creep and snap
+-- back every step.
 local function advance(v, a, dt)
+	if v <= 0 then return 0, 0 end
 	if a < 0 and v + a * dt <= 0 then
 		return v * v / (-2 * a), 0
 	end
