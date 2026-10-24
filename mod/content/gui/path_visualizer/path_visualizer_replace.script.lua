@@ -31,11 +31,17 @@ local function copyOf(t)
 	return copy
 end
 
--- Vanilla children lists can have nil holes (`cond and node or nil`): compacted.
+-- Vanilla children lists can have nil holes (`cond and node or nil`): compacted. Named
+-- entries are kept as they are (the line window's action has `lineViewer = lineViewer`;
+-- dropping it detached the line viewer, with a "Preserved props" warning every frame).
 local function compact(list)
 	local out, maxIndex = {}, 0
-	for k in pairs(list or {}) do
-		if type(k) == "number" and k > maxIndex then maxIndex = k end
+	for k, v in pairs(list or {}) do
+		if type(k) == "number" then
+			if k > maxIndex then maxIndex = k end
+		else
+			out[k] = v
+		end
 	end
 	for i = 1, maxIndex do
 		if list[i] ~= nil then out[#out + 1] = list[i] end
