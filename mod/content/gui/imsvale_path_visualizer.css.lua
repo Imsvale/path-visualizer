@@ -11,14 +11,12 @@ function data()
 	a("Window!imsvale-pathvis-settings", {
 		anchorPoint = { 0.0, 0.0 },
 	})
-	-- No title bar: hidden the way the game hides it (construction menu window, line manager
-	-- popover, full-screen windows: Window::TitleBar, visibility "none"). A smaller title font
-	-- didn't take (fontSize on Window::Title), and the window's compact mode broke its frame.
-	a("Window!imsvale-pathvis-settings Window::TitleBar", {
-		visibility = "none",
-	})
+	-- The title bar stays: the window frame's artwork assumes one. Hiding it (Window::TitleBar,
+	-- visibility "none", as the game does for popovers) or the window's compact mode shifted
+	-- the drop shadow and left a dark band in the background, and fontSize on Window::Title
+	-- doesn't take (2026-10-24). The construction menu's settings window keeps its title too.
 	a("Window!imsvale-pathvis-settings Window::Content", {
-		padding = { 10, 14, 10, 14 },
+		padding = { 4, 12, 10, 12 },
 	})
 	-- a little space between the rows
 	a("Window!imsvale-pathvis-settings CheckBox", {
