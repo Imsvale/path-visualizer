@@ -21,6 +21,12 @@ Open:
 
 Parked:
 
+- Settings window without a title bar: hiding it (or compact) broke the frame's shadow and
+  background. The construction menu window hides its title bar and still looks clean
+  (Window!construct-menu-window Window::TitleBar, visibility none, in
+  gui/construction/construction.css.lua): its other rules probably supply the frame for that
+  case; borrow them. Fine with the title for now (user, 2026-10-24).
+
 - Start the line at the train's front instead of at the start of its front edge (the first
   edge would be redrawn as the train moves). Not sure it's needed.
 - Teal instead of Lua: needs Lua and `tl` installed to type-check; not worth it for now
