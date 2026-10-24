@@ -293,7 +293,16 @@ local function railVehicles()
 	return list
 end
 
+-- dev timing: adds the time since `since` to phase `name`, returns now
+local function phase(name, since)
+	if not TIMING or not since then return nil end
+	local c = clock()
+	if c then state.timing[name] = (state.timing[name] or 0) + (c - since) * 1000 end
+	return c
+end
+
 local function buildStatic()
+	local t0 = TIMING and clock() or nil
 	local trains, parts = {}, {}
 	local entities = railVehicles()
 	for _, train in ipairs(entities) do
@@ -301,6 +310,7 @@ local function buildStatic()
 		if t then trains[#trains + 1] = t end
 	end
 	state.trains = entities
+	t0 = phase("read", t0)
 
 	-- who holds which edge and node
 	local networks, heldEdges, heldNodes = {}, {}, {}
@@ -323,6 +333,7 @@ local function buildStatic()
 	end
 
 	local signature = table.concat(parts, "|")
+	t0 = phase("tables", t0)
 	if signature == state.signature then return false end
 	state.signature = signature
 
@@ -349,6 +360,7 @@ local function buildStatic()
 		end
 	end
 	state.static = lines
+	phase("lines", t0)
 	return true
 end
 
@@ -450,6 +462,7 @@ local function buildBraking(fraction)
 end
 
 local function publish(braking)
+	if TIMING then state.timing.publishes = (state.timing.publishes or 0) + 1 end
 	local lines = {}
 	for _, e in ipairs(state.static) do lines[#lines + 1] = e end
 	for _, e in ipairs(braking) do lines[#lines + 1] = e end
@@ -542,8 +555,10 @@ local function noteTiming(started, built)
 	tm.since = tm.since or c
 	if c - tm.since >= 10 then
 		local s = c - tm.since
-		log(string.format("timing: %.1f polls/s, %.1f builds/s, %.2f ms per poll (max %.1f), %.1f ms/s in all; %d trains, %d lines",
-			tm.polls / s, tm.builds / s, tm.total / tm.polls, tm.max, tm.total / s, #state.trains, state.lines and #state.lines or 0))
+		log(string.format("timing: %.1f polls/s, %.1f builds/s, %.1f publishes/s, %.2f ms per poll (max %.1f), %.1f ms/s in all"
+			.. " (read %.1f, tables %.1f, lines %.1f ms/s); %d trains, %d lines",
+			tm.polls / s, tm.builds / s, (tm.publishes or 0) / s, tm.total / tm.polls, tm.max, tm.total / s,
+			(tm.read or 0) / s, (tm.tables or 0) / s, (tm.lines or 0) / s, #state.trains, state.lines and #state.lines or 0))
 		state.timing = { polls = 0, builds = 0, total = 0, max = 0, since = c }
 	end
 end
