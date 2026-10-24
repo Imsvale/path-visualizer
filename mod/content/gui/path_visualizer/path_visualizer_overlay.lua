@@ -57,6 +57,7 @@ local devOk, dev = pcall(ug_require, "imsvale_path_visualizer::/scripts/path_vis
 if not devOk or type(dev) ~= "table" then dev = {} end
 local LOG_SELECTED = dev.logSelected == true -- selected trains' dynamics, a log line per step
 local PATHPOS_MARKER = dev.pathPosMarker == true -- a bar at selected trains' pathPos
+local TIMING = dev.timing == true -- the overlay's time per frame, logged every 10 s
 
 local state = {
 	-- settings, per session: the HUD button (path_visualizer_button.script.lua) and its popover
@@ -76,6 +77,8 @@ local state = {
 	failed = false,
 	logged = {},
 	sectionInfo = {}, -- dev log: train -> the next section's verdict
+	rail = {}, -- land vehicle -> whether it's a train
+	timing = { polls = 0, builds = 0, total = 0, max = 0, since = nil }, -- dev timing log
 }
 
 local function log(msg)
@@ -281,13 +284,34 @@ local function sectionTaken(t, heldEdges, heldNodes, networks)
 	return false
 end
 
+-- landVehicleMoveSystem.forEach goes over every land vehicle, buses and trucks too (379 in an
+-- organic save, most of them road vehicles: the overlay walked all their paths and lagged the
+-- game, 2026-10-24). Trains only: carrier RAIL, looked up once per vehicle.
+local function railVehicles()
+	local rail, list = {}, {}
+	local RAIL = api.type.enum.Carrier.RAIL
+	api.engine.system.landVehicleMoveSystem.forEach(function(e)
+		local isRail = state.rail[e]
+		if isRail == nil then
+			isRail = false
+			pcall(function()
+				isRail = api.engine.getComponent(e, api.type.ComponentType.TRANSPORT_VEHICLE).carrier == RAIL
+			end)
+		end
+		rail[e] = isRail
+		if isRail then list[#list + 1] = e end
+	end)
+	state.rail = rail -- vehicles gone are dropped
+	return list
+end
+
 local function buildStatic()
-	local trains, parts, entities = {}, {}, {}
-	api.engine.system.landVehicleMoveSystem.forEach(function(train)
-		entities[#entities + 1] = train
+	local trains, parts = {}, {}
+	local entities = railVehicles()
+	for _, train in ipairs(entities) do
 		local t = readTrain(train)
 		if t then trains[#trains + 1] = t end
-	end)
+	end
 	state.trains = entities
 
 	-- who holds which edge and node
@@ -517,8 +541,29 @@ end
 
 -- Reads the trains once per game time step (time stands still while paused), and when the
 -- selection changes. In between, only the selected trains' bars are moved on.
+-- dev: the overlay's cost, logged every 10 s of real time
+local function noteTiming(started, built)
+	local c = clock()
+	if not c or not started then return end
+	local tm = state.timing
+	local ms = (c - started) * 1000
+	tm.polls = tm.polls + 1
+	tm.builds = tm.builds + (built and 1 or 0)
+	tm.total = tm.total + ms
+	tm.max = math.max(tm.max, ms)
+	tm.since = tm.since or c
+	if c - tm.since >= 10 then
+		local s = c - tm.since
+		log(string.format("timing: %.1f polls/s, %.1f builds/s, %.2f ms per poll (max %.1f), %.1f ms/s in all; %d trains, %d lines",
+			tm.polls / s, tm.builds / s, tm.total / tm.polls, tm.max, tm.total / s, #state.trains, state.lines and #state.lines or 0))
+		state.timing = { polls = 0, builds = 0, total = 0, max = 0, since = c }
+	end
+end
+
 function overlay.poll()
 	if state.failed or not state.on then return end
+	local started = TIMING and clock() or nil
+	local built = false
 	local ok, err = pcall(function()
 		local selectionChanged = updateSelection()
 		local now = gameTime()
@@ -543,6 +588,7 @@ function overlay.poll()
 		end
 		state.time = now
 		if selectionChanged then state.signature = nil end
+		built = true
 		local staticChanged = buildStatic()
 		local braking = buildBraking(0)
 		if staticChanged or #braking > 0 or selectionChanged or state.hadBraking then
@@ -550,6 +596,7 @@ function overlay.poll()
 		end
 		state.hadBraking = #braking > 0
 	end)
+	if TIMING then noteTiming(started, built) end
 	if not ok then
 		state.failed = true
 		state.lines = nil

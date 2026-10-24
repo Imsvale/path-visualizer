@@ -109,13 +109,26 @@ local function guiUpdate(_userParams, _state, guiState)
 	if not now or now == gs.lastTime then return end -- paused
 	gs.lastTime = now
 	gs.trains = gs.trains or {}
+	gs.rail = gs.rail or {}
 
 	local ok, err = pcall(function()
-		local seen = {}
-		api.engine.system.landVehicleMoveSystem.forEach(function(train)
-			seen[tostring(train)] = true
-			check(gs.trains, train, now)
+		-- forEach goes over every land vehicle, road vehicles too: trains only (carrier RAIL,
+		-- looked up once per vehicle)
+		local RAIL = api.type.enum.Carrier.RAIL
+		local seen, rail = {}, {}
+		api.engine.system.landVehicleMoveSystem.forEach(function(e)
+			local key = tostring(e)
+			local isRail = gs.rail[key]
+			if isRail == nil then
+				isRail = api.engine.getComponent(e, api.type.ComponentType.TRANSPORT_VEHICLE).carrier == RAIL
+			end
+			rail[key] = isRail
+			if isRail then
+				seen[key] = true
+				check(gs.trains, e, now)
+			end
 		end)
+		gs.rail = rail
 		for key in pairs(gs.trains) do
 			if not seen[key] then gs.trains[key] = nil end
 		end
