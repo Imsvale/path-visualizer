@@ -7,11 +7,11 @@
 -- path.edges [reservedFrom, reservedTo), released behind the train edge by edge; drawn from
 -- the train's front edge on.
 -- Line colour: whether the train is waiting for a free path (it tried to extend its
--- reservation and was refused). End bar: white where the reservation reaches the end of the
--- leg's path (at or beyond the stop), red where it ends short of it (at a signal, or another
--- train's reservation; the train needn't be trying for more yet). Selected trains (an open
--- entity window) get wider lines with a white outline and, if switched on, bars where they
--- would stop braking now (normally and in an emergency stop).
+-- reservation and was refused). A white bar marks where the reservation ends. (It was red
+-- where it ended short of the leg's path, white at its end: dropped as more confusing than
+-- useful, user 2026-10-24.) Selected trains (an open entity window) get wider lines with a
+-- white outline and, if switched on, bars where they would stop braking now (normally and in
+-- an emergency stop).
 --
 -- A 3D overlay only renders inside the active action's ActionDescriptor (network-wireframe,
 -- parallelism), so path_visualizer_replace.script.lua puts these lines into every
@@ -35,8 +35,7 @@ local function v4(c) return api.type.Vec4f.new(c[1], c[2], c[3], c[4]) end
 
 local COLOR_PATH = { 0.2, 0.85, 1.0, 0.75 }
 local COLOR_WAITING = { 1.0, 0.6, 0.1, 0.75 }
-local COLOR_RED = { 1.0, 0.15, 0.15, 1.0 }
-local COLOR_PATH_END = { 1.0, 1.0, 1.0, 1.0 }
+local COLOR_END = { 1.0, 1.0, 1.0, 1.0 }
 local COLOR_BRAKING = { 1.0, 0.9, 0.1, 1.0 }
 local COLOR_PATHPOS = { 1.0, 0.2, 1.0, 1.0 }
 local COLOR_EMERGENCY = { 0.6, 0.45, 1.0, 1.0 }
@@ -188,8 +187,7 @@ local function isSelected(train)
 	return visible
 end
 
--- One train's reservation ahead of it, or nil: its edge ids, and whether it reaches the end of
--- the leg's path.
+-- One train's reservation ahead of it, or nil: its edge ids.
 local function readTrain(train)
 	local mp = api.engine.getComponent(train, api.type.ComponentType.MOVE_PATH)
 	if not mp or not mp.reservedTo then return nil end
@@ -201,20 +199,12 @@ local function readTrain(train)
 	for i = from, to - 1 do
 		ids[#ids + 1] = mp.path.edges[i + 1].edgeId
 	end
-	-- the edge after the end, to find where the end is. A reservation ending short of the leg's
-	-- path is held (at a signal, or by another train's reservation): never at a green signal,
-	-- as a signal only turns green once a reservation runs past it.
-	local nextId, endKind = nil, "end"
-	if to < n then
-		nextId = mp.path.edges[to + 1].edgeId
-		endKind = "held"
-	end
 	local selected = state.selected[train] == true
 	return {
 		ids = ids,
+		-- the edges either side, to find which end of the last edge the reservation ends at
 		prevId = from > 0 and mp.path.edges[from].edgeId or nil,
-		nextId = nextId,
-		endKind = endKind,
+		nextId = to < n and mp.path.edges[to + 1].edgeId or nil,
 		selected = selected,
 		waiting = api.engine.system.landVehicleMoveSystem.isTrainWaitingForFreePath(train),
 		key = string.format("%s:%d:%d:%d:%d:%s", tostring(train), n, from, to, ids[1].entity, tostring(selected)),
@@ -228,7 +218,7 @@ local function buildStatic()
 		local t = readTrain(train)
 		if t then
 			trains[#trains + 1] = t
-			parts[#parts + 1] = t.key .. ":" .. tostring(t.waiting) .. ":" .. t.endKind
+			parts[#parts + 1] = t.key .. ":" .. tostring(t.waiting)
 		end
 	end)
 	state.trains = entities
@@ -254,8 +244,7 @@ local function buildStatic()
 		if last and #lines < MAX_EDGES then
 			local prev = #t.ids > 1 and geometryOf(networks, t.ids[#t.ids - 1]) or geometryOf(networks, t.prevId)
 			local fw = forward(prev, last, geometryOf(networks, t.nextId))
-			local endColor = t.endKind == "end" and COLOR_PATH_END or COLOR_RED
-			addBar(lines, last, fw and 1 or 0, endColor, BAR_WIDTH)
+			addBar(lines, last, fw and 1 or 0, COLOR_END, BAR_WIDTH)
 		end
 	end
 	state.static = lines

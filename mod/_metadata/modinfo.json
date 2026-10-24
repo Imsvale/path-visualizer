@@ -1,13 +1,13 @@
 {
-    "name": "Path Visualizer",
-    "summary": "Shows the path a train has reserved.",
-    "description": "Work in progress.",
     "authors": [
         {
             "name": "imsvale",
             "role": "CREATOR"
         }
     ],
+    "description": "Work in progress.",
+    "name": "Train Path Visualizer",
+    "summary": "Shows the path a train has reserved.",
     "tags": [
         "Script Mod"
     ],
