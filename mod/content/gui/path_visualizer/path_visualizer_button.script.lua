@@ -1,6 +1,11 @@
 -- The overlay's switch: a toggle button in the HUD's mod button area (top left). Right-click
--- opens the settings, a popover below the button (the game's PopoverWindow: it closes on a
--- click outside or Escape).
+-- opens the settings, a window right under the button that closes on a click outside it or
+-- Escape (as the game's popovers do).
+--
+-- The settings window is an ordinary builtin.Window with rows from the game's own
+-- script_param_util.buildScriptParamComp (label and segmented buttons, as the construction
+-- menu's settings; the map editor builds its Yes / No rows the same way). The game's
+-- PopoverWindow, used at first, is styled as a bare box (classes popover, no-close-button).
 --
 -- The mod button area passes its plugins no game context; the window container comes from
 -- gui/main/game_react_globals.tl (the global gameGlobals behind it isn't visible to mods).
@@ -8,7 +13,7 @@
 local react = ug_require "::/gui/main/react.lua"
 local builtin = ug_require "::/gui/main/builtin.lua"
 local main_mod_button_area = ug_require "::/gui/main/main_mod_button_area.tl"
-local popover_react_util = ug_require "::/gui/main/popover_react_util.tl"
+local script_param_util = ug_require "::/gui/main/script_param_util.tl"
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 local overlay = ug_require "imsvale_path_visualizer::/gui/path_visualizer/path_visualizer_overlay.lua"
 
@@ -26,7 +31,7 @@ local function windowApi()
 	return wc
 end
 
--- A short bar in an overlay colour, beside its setting (image and size: the stylesheet).
+-- A short bar in an overlay colour (image and size: the stylesheet, R::Component!imsvale-pathvis-swatch).
 local function swatch(color)
 	return builtin.Component{
 		meta = {
@@ -36,43 +41,62 @@ local function swatch(color)
 	}
 end
 
--- A checkbox with the colour it has in the overlay, in front of it (placed after it, the
--- swatch didn't show: the checkbox probably takes the row's width).
-local function settingRow(label, state, color, set)
+-- A No / Yes row as in the construction menu's settings, with its overlay colour in front.
+local function settingRow(label, on, color, set)
+	local param = api.type.ScriptParam.new()
+	param.name = label
+	param.uiType = api.type["enum"].ScriptParamType.Button
+	param.values = { _("No"), _("Yes") }
+	param.defaultIndex = on and 2 or 1
 	return builtin.BoxLayout{
 		orientation = builtin.type.Orientation.Horizontal,
 		children = {
 			swatch(color),
-			builtin.CheckBox{
-				label = label,
-				value = state:old(),
-				onValueChange = function(value)
-					state:set(value)
-					set(value == 1)
-				end,
-			},
+			script_param_util.buildScriptParamComp(param, param.defaultIndex, function(index)
+				set(index == 2)
+			end),
 		},
 	}
 end
 
-local Settings = react.RegisterRecipe("ImsvalePathVisualizerSettings", function()
-	local braking = react.useState(overlay.isBraking() and 1 or 0)
-	local emergency = react.useState(overlay.isEmergency() and 1 or 0)
+local SettingsContent = react.RegisterRecipe("ImsvalePathVisualizerSettingsContent", function(params)
+	-- close on a click outside or Escape, as PopoverWindowContent does (gui/main/popover_react_util.tl)
+	react.useInputAction("IA_MENU_BACK", react.iaHandler(function() params.onClose() end))
+	react.onMouseEvent(function(evt)
+		if evt.type == api.gui.mouse.Event.Type.PressedOutside and evt.button == 0 then
+			params.onClose()
+			return true
+		end
+		return false
+	end)
 	return builtin.BoxLayout{
 		orientation = builtin.type.Orientation.Vertical,
 		children = {
-			settingRow(_("Braking point"), braking, overlay.colors.braking, overlay.setBraking),
-			settingRow(_("Emergency stop"), emergency, overlay.colors.emergency, overlay.setEmergency),
+			settingRow(_("Braking point"), overlay.isBraking(), overlay.colors.braking, overlay.setBraking),
+			settingRow(_("Emergency stop"), overlay.isEmergency(), overlay.colors.emergency, overlay.setEmergency),
 		},
 	}
 end)
 
-local popoverOpen = false
+local SettingsWindow = react.RegisterWrapperRecipe("ImsvalePathVisualizerSettingsWindow", builtin.Window, function(params)
+	return builtin.Window{
+		meta = { class = "imsvale-pathvis-settings" },
+		title = _("Settings"),
+		closable = false,
+		movable = false,
+		initialX = params.x,
+		initialY = params.y,
+		onClose = params.onClose,
+		content = SettingsContent{ onClose = params.onClose },
+	}
+end)
+
+local settingsOpen = false
 
 local function closeSettings()
 	local wc = windowApi()
-	if wc then wc.removeAllWindows(popover_react_util.PopoverWindow) end
-	popoverOpen = false
+	if wc then wc.removeAllWindows(SettingsWindow) end
+	settingsOpen = false
 end
 
 local function openSettings(pos)
@@ -81,18 +105,9 @@ local function openSettings(pos)
 		log("no window container: settings unavailable")
 		return
 	end
-	wc.removeAllWindows(popover_react_util.PopoverWindow)
-	wc.addWindow(popover_react_util.PopoverWindow, "imsvale_path_visualizer.settings", {
-		onClose = closeSettings,
-		x = pos.x,
-		y = pos.y,
-		windowTitle = _("Path Visualizer"),
-		windowClass = "imsvale-pathvis-settings",
-		recipe = Settings,
-		params = {},
-		compact = true,
-	})
-	popoverOpen = true
+	wc.removeAllWindows(SettingsWindow)
+	wc.addSingletonWindow(SettingsWindow, { x = pos.x, y = pos.y, onClose = closeSettings })
+	settingsOpen = true
 end
 
 local Button = react.RegisterPluginRecipe(main_mod_button_area.MainModButtonAreaExtension, "ImsvalePathVisualizerButton", function()
@@ -101,7 +116,7 @@ local Button = react.RegisterPluginRecipe(main_mod_button_area.MainModButtonArea
 
 	react.onMouseEvent(function(evt)
 		if evt.type == api.gui.mouse.Event.Type.Pressed and evt.button ~= 0 then
-			if popoverOpen then
+			if settingsOpen then
 				closeSettings()
 			else
 				-- right under the button: its top left corner plus its height
