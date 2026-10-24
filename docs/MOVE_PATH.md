@@ -14,6 +14,10 @@ dyn, dyn0 = { pathPos = {edgeIndex, pos01, pos}, pathPos0 (nil), speed, speed0 (
 reservedFrom, reservedTo, occupiedBackIndex, occupiedFrontIndex
 ```
 
+## Which vehicles
+
+`landVehicleMoveSystem.forEach` goes over every land vehicle, not only trains as its doc says: in an organic save it gave 379 vehicles, most of them road vehicles (MOVE_PATH too, reservation `[0, 0)`). Trains: `TRANSPORT_VEHICLE.carrier == api.type.enum.Carrier.RAIL` (2026-10-24).
+
 ## Reservation
 
 - `reservedFrom` .. `reservedTo`: a half-open range of indices into `path.edges`, `[reservedFrom, reservedTo)`. Confirmed (2026-10-24), train 543, path of 83 edges:
