@@ -40,6 +40,9 @@ local COLOR_EMERGENCY = { 0.6, 0.45, 1.0, 1.0 }
 -- one observation; no setting for it found).
 local EMERGENCY_FACTOR = 3
 
+-- dev: log each selected train's MOVE_PATH dynamics once per game time step
+local LOG_SELECTED = true
+
 local state = {
 	-- settings, per session: the HUD button (path_visualizer_button.script.lua) and its popover
 	on = true,
@@ -294,8 +297,11 @@ local function buildBraking(elapsed)
 				logOnce("nodata" .. tostring(train), "no brake deceleration for train " .. tostring(train))
 				return
 			end
+			-- while braking, the train's actual deceleration (logged 2.50..2.60 against a
+			-- brakeDeceleration of 2.5: with the nominal value the point lands a little long)
+			local brake = (mp.dyn.brakeDecel or 0) > 0 and mp.dyn.brakeDecel or d.brake
 			if state.braking then
-				g, t = pathPoint(mp, networks, pp.edgeIndex, pos + d.front + v * v / (2 * d.brake))
+				g, t = pathPoint(mp, networks, pp.edgeIndex, pos + d.front + v * v / (2 * brake))
 				if g then addBar(lines, g, t, COLOR_BRAKING, BAR_WIDTH) end
 			end
 			if state.emergency then
@@ -394,7 +400,20 @@ function overlay.poll()
 			if next(state.selected) ~= nil then publish(buildBraking(sinceStep())) end
 			return
 		end
-		if now ~= state.time then noteStep(now) end
+		if now ~= state.time then
+			noteStep(now)
+			if LOG_SELECTED then
+				for train in pairs(state.selected) do
+					pcall(function()
+						local mp = api.engine.getComponent(train, api.type.ComponentType.MOVE_PATH)
+						local dyn = mp.dyn
+						log(string.format("sel t=%.1f train=%s n=%d P=%d@%.2f v=%.3f a=%.3f b=%.3f standing=%.1f untilAccel=%.2f state=%s",
+							now / 1000, tostring(train), #mp.path.edges, dyn.pathPos.edgeIndex, dyn.pathPos.pos, dyn.speed,
+							dyn.accel, dyn.brakeDecel, dyn.timeStanding, dyn.timeUntilAccel, tostring(mp.state)))
+					end)
+				end
+			end
+		end
 		state.time = now
 		if selectionChanged then state.signature = nil end
 		local staticChanged = buildStatic()
