@@ -5,4 +5,5 @@ return {
 	logSelected = true, -- overlay: selected trains' MOVE_PATH dynamics, a log line per game time step
 	pathPosMarker = true, -- overlay: a magenta bar at selected trains' pathPos (the middle of the train)
 	timing = true, -- overlay: its time per frame, a log line every 10 s
+	logInfo = true, -- overlay: one-off information lines (errors are always logged)
 }

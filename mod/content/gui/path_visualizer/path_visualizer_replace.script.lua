@@ -125,7 +125,11 @@ local function doReplace(replacementApi)
 		end
 		return injected
 	end))
-	log("ActionDescriptor and EdgeRenderable wrapped")
+	-- dev switch logInfo (scripts/path_visualizer_dev.lua): off in a release
+	local devOk, dev = pcall(ug_require, "imsvale_path_visualizer::/scripts/path_visualizer_dev.lua")
+	if devOk and type(dev) == "table" and dev.logInfo == true then
+		log("ActionDescriptor and EdgeRenderable wrapped")
+	end
 end
 
 function data()

@@ -72,6 +72,7 @@ if not devOk or type(dev) ~= "table" then dev = {} end
 local LOG_SELECTED = dev.logSelected == true -- selected trains' dynamics, a log line per step
 local PATHPOS_MARKER = dev.pathPosMarker == true -- a bar at selected trains' pathPos
 local TIMING = dev.timing == true -- the overlay's time per frame, logged every 10 s
+local LOG_INFO = dev.logInfo == true -- one-off information lines (errors are always logged)
 
 local state = {
 	-- settings, per session: the HUD button (path_visualizer_button.script.lua) and its popover
@@ -606,8 +607,10 @@ local function vehicleData(train)
 		local front, back
 		pcall(function() front, back = data.bounds.front, data.bounds.back end)
 		local brake, length = data.brakeDeceleration, data.length
-		log(string.format("vehicle data train %s: brakeDeceleration=%s length=%s bounds.front=%s bounds.back=%s",
-			tostring(train), tostring(brake), tostring(length), tostring(front), tostring(back)))
+		if LOG_INFO then
+			log(string.format("vehicle data train %s: brakeDeceleration=%s length=%s bounds.front=%s bounds.back=%s",
+				tostring(train), tostring(brake), tostring(length), tostring(front), tostring(back)))
+		end
 		if type(brake) == "number" and brake > 0 then
 			d = { brake = brake, front = type(front) == "number" and front or (length or 0) / 2 }
 		end
