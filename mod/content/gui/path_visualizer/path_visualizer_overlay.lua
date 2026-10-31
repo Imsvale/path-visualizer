@@ -294,7 +294,10 @@ local function pathForward(p, i)
 	local fw = p.fw[i]
 	if fw == nil then
 		local g = geometryOf(p.ids[i])
-		fw = g and forward(i > 1 and geometryOf(p.ids[i - 1]) or nil, g, i < p.n and geometryOf(p.ids[i + 1]) or nil) or true
+		fw = true
+		if g then
+			fw = forward(i > 1 and geometryOf(p.ids[i - 1]) or nil, g, i < p.n and geometryOf(p.ids[i + 1]) or nil)
+		end
 		p.fw[i] = fw
 	end
 	return fw
