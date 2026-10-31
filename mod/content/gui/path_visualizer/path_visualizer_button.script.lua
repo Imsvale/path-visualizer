@@ -145,7 +145,7 @@ local Button = react.RegisterPluginRecipe(main_mod_button_area.MainModButtonArea
 					overlay.setOn(value == 1)
 				end,
 				content = builtin.ImageView{
-					path = "::/gui/construction/menu/menu_categories/category_rail_signals.tga",
+					path = "imsvale_path_visualizer::/gui/path.tga",
 					scaling = builtin.type.ImageViewScaling.AutoFit,
 				},
 			},
