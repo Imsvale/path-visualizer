@@ -11,8 +11,9 @@
 -- section beyond it (to the next signal facing the train): white if it's free, red if another
 -- train holds an edge of it or a node inside it, grey where the reservation already reaches
 -- the end of the leg's path (the next leg's path doesn't exist yet). Selected trains (an open
--- entity window) get wider lines with a white outline and, if switched on, bars where they
--- would stop braking now (normally and in an emergency stop).
+-- entity window) get wider lines with a white outline, a thin red line and bar along a taken
+-- next section and, if switched on, bars where they would stop braking now (normally and in
+-- an emergency stop).
 --
 -- A 3D overlay only renders inside the active action's ActionDescriptor (network-wireframe,
 -- parallelism), so path_visualizer_replace.script.lua puts these lines into every
@@ -38,6 +39,8 @@ local overlay = {}
 local MAX_EDGES = 4000
 local WIDTH = 0.6
 local WIDTH_SELECTED = 1.2
+local WIDTH_NEXT = 0.2 -- the next section, when it's taken
+local OFFSET_Z_NEXT = 1.05
 local BAR = 1.25 -- half length of the bars across the track (metres)
 local BAR_WIDTH = 0.3
 local BAR_MOVE = 0.3 -- metres a moving bar has to move before it's redrawn
@@ -51,6 +54,7 @@ local COLOR_WAITING = { 1.0, 0.6, 0.1, 0.75 }
 local COLOR_END_FREE = { 1.0, 1.0, 1.0, 1.0 }
 local COLOR_END_TAKEN = { 1.0, 0.15, 0.15, 1.0 }
 local COLOR_END_LEG = { 0.6, 0.6, 0.6, 1.0 }
+local COLOR_NEXT = { 1.0, 0.15, 0.15, 0.75 }
 local COLOR_BRAKING = { 1.0, 0.9, 0.1, 1.0 }
 local COLOR_PATHPOS = { 1.0, 0.2, 1.0, 1.0 }
 local COLOR_EMERGENCY = { 0.6, 0.45, 1.0, 1.0 }
@@ -434,11 +438,12 @@ end
 
 -- Reads one train and brings its state up to date. Returns true if its line pieces changed.
 -- Per train: path (readPath), held = [a, b) path indices held, front (first drawn index), to,
--- waiting, selected, endKind, pieces (its line pieces).
+-- waiting, selected, endKind, nextEnd (end of the next section), pieces (its line pieces),
+-- nextPieces (those drawn on top of every train's).
 local function updateTrain(train)
 	local st = state.tr[train]
 	if not st then
-		st = { a = 0, b = 0, pieces = {} }
+		st = { a = 0, b = 0, pieces = {}, nextPieces = {} }
 		state.tr[train] = st
 	end
 	local mp = api.engine.getComponent(train, api.type.ComponentType.MOVE_PATH)
@@ -446,6 +451,7 @@ local function updateTrain(train)
 		updateHeld(train, st.path, st.a, st.b, nil, 0, 0)
 		local changed = #st.pieces > 0
 		st.path, st.a, st.b, st.pieces, st.key = nil, 0, 0, {}, nil
+		st.nextPieces = {}
 		st.changed = false
 		return changed
 	end
@@ -479,11 +485,13 @@ local function updateEnd(train)
 	local p = st.path
 	if not p then return false end
 	local kind
+	st.nextEnd = nil
 	if st.to >= p.n then
 		kind = "leg"
 	else
 		local e = st.to + 1
 		while e < p.n and not pathSignal(p, e + 1) do e = e + 1 end
+		st.nextEnd = e
 		kind = sectionTaken(train, p, st.to, e) and "taken" or "free"
 		if LOG_SELECTED and st.selected then
 			state.sectionInfo[train] = string.format("next section: %s, %d edges (nodes per edge: %d)",
@@ -501,6 +509,7 @@ local function buildPieces(train)
 	local p = st.path
 	local pieces = {}
 	st.pieces = pieces
+	st.nextPieces = {}
 	if not p or st.to <= st.front then return end
 	local cache = state.lineCache
 	local color = st.waiting and COLOR_WAITING or COLOR_PATH
@@ -541,6 +550,36 @@ local function buildPieces(train)
 		end
 		if bar then pieces[#pieces + 1] = bar end
 	end
+	if st.selected and st.endKind == "taken" then
+		local lastNext
+		for i = st.to, st.nextEnd - 1 do
+			local key = p.keys[i + 1] .. "next"
+			local line = cache[key]
+			if line == nil then
+				local g = geometryOf(p.ids[i + 1])
+				line = g and g.length >= 0.1 and makeEdge(g, COLOR_NEXT, WIDTH_NEXT) or false
+				-- a little above the other lines, where a tool's EdgeRenderable tests depth
+				if line then line.offsetZ = OFFSET_Z_NEXT end
+				cache[key] = line
+			end
+			if line then
+				st.nextPieces[#st.nextPieces + 1] = line
+				lastNext = i
+			end
+		end
+		if lastNext then
+			-- its own bar, at its far end
+			local fw = pathForward(p, lastNext + 1)
+			local key = p.keys[lastNext + 1] .. "nextend" .. (fw and "1" or "0")
+			local bar = cache[key]
+			if bar == nil then
+				bar = makeBar(geometryOf(p.ids[lastNext + 1]), fw and 1 or 0, COLOR_NEXT, WIDTH_NEXT) or false
+				if bar then bar.offsetZ = OFFSET_Z_NEXT end
+				cache[key] = bar
+			end
+			if bar then st.nextPieces[#st.nextPieces + 1] = bar end
+		end
+	end
 end
 
 -- Brings every train up to date; returns true if the static lines changed.
@@ -576,6 +615,13 @@ local function buildStatic()
 	for _, train in ipairs(list) do
 		local st = state.tr[train]
 		for _, e in ipairs(st.pieces) do
+			if #lines >= MAX_EDGES then break end
+			lines[#lines + 1] = e
+		end
+	end
+	-- after every train's lines, to draw on top of them
+	for _, train in ipairs(list) do
+		for _, e in ipairs(state.tr[train].nextPieces) do
 			if #lines >= MAX_EDGES then break end
 			lines[#lines + 1] = e
 		end
