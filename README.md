@@ -2,6 +2,8 @@ Show the currently reserved path of trains.
 
 ### Features
 
+Marked **[S]** for selected train(s) only.
+
 * Normal path in blue.
 * Orange when stopping to wait for clear path ahead.
 * A bar across the track where the current reservation ends.
@@ -10,8 +12,10 @@ Show the currently reserved path of trains.
   * Gray: End of leg.
 * Toggle overlay with mod button in the top left.
 * Right-click the button for settings:
-  * Braking distance for selected trains
-  * Manual stop distance (3x braking)
+  * **[S]** Braking distance
+  * **[S]** Manual stop distance (3x braking)
+* **[S]** Wider path visual with two extra white lines
+* **[S]** Thin, red line on path ahead that is not clear (after currently reserved segment)
 
 ### Limitations
 
@@ -31,6 +35,7 @@ The overlay is drawn through the game's tool overlay (`builtin.ActionDescriptor`
 Safe to add and remove at any time. Nothing is stored in your save.
 
 ### Contact
+* GitHub: https://github.com/Imsvale/path-visualizer/
 * Reddit: [u/Imsvale](https://www.reddit.com/user/Imsvale)
 * Discord: `imsvale`
 

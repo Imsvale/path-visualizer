@@ -42,6 +42,7 @@ local WIDTH_SELECTED = 1.2
 local WIDTH_NEXT = 0.2 -- the next section, when it's taken
 local OFFSET_Z_NEXT = 1.05
 local BAR = 1.25 -- half length of the bars across the track (metres)
+local BAR_NEXT = BAR * 2 / 3 -- the same, for the next section's bar
 local BAR_WIDTH = 0.3
 local BAR_MOVE = 0.3 -- metres a moving bar has to move before it's redrawn
 local SELECTION_INTERVAL = 0.25 -- seconds between checks for open train windows
@@ -157,13 +158,14 @@ local function dist2(p, q)
 end
 
 -- A bar across geometry g at parameter t.
-local function makeBar(g, t, color, width)
+local function makeBar(g, t, color, width, halfLength)
+	halfLength = halfLength or BAR
 	local p = calc(g, t)
 	local a, b = calc(g, math.max(0, t - 0.01)), calc(g, math.min(1, t + 0.01))
 	local dx, dy = b.x - a.x, b.y - a.y
 	local len = math.sqrt(dx * dx + dy * dy)
 	if len < 1e-6 then return nil end
-	local nx, ny = -dy / len * BAR, dx / len * BAR
+	local nx, ny = -dy / len * halfLength, dx / len * halfLength
 	return makeEdge(straightGeometry(p.x + nx, p.y + ny, p.x - nx, p.y - ny, p.z), color, width)
 end
 
@@ -573,7 +575,7 @@ local function buildPieces(train)
 			local key = p.keys[lastNext + 1] .. "nextend" .. (fw and "1" or "0")
 			local bar = cache[key]
 			if bar == nil then
-				bar = makeBar(geometryOf(p.ids[lastNext + 1]), fw and 1 or 0, COLOR_NEXT, WIDTH_NEXT) or false
+				bar = makeBar(geometryOf(p.ids[lastNext + 1]), fw and 1 or 0, COLOR_NEXT, WIDTH_NEXT, BAR_NEXT) or false
 				if bar then bar.offsetZ = OFFSET_Z_NEXT end
 				cache[key] = bar
 			end
