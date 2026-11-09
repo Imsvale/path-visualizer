@@ -132,24 +132,29 @@ local Button = react.RegisterPluginRecipe(main_mod_button_area.MainModButtonArea
 		return false
 	end)
 
-	-- a Component, not a bare BoxLayout: a layout takes no margin
-	return builtin.Component{
-		meta = { class = "imsvale-pathvis-button-area" },
-		layout = builtin.BoxLayout{
-			children = {
-				builtin.ToggleButton{
-					meta = {
-						id = "imsvale_path_visualizer.button",
-						tooltip = _("Reserved train paths"),
-					},
-					value = on:old(),
-					onValueChange = function(value)
-						on:set(value)
-						overlay.setOn(value == 1)
-					end,
-					content = builtin.ImageView{
-						path = "imsvale_path_visualizer::/gui/path.tga",
-						scaling = builtin.type.ImageViewScaling.AutoFit,
+	-- The root must be a layout (the button area refuses anything else: "Recipe child must be
+	-- a layout"), and a layout takes no margin: the margin is on a Component inside it.
+	return builtin.BoxLayout{
+		children = {
+			builtin.Component{
+				meta = { class = "imsvale-pathvis-button-area" },
+				layout = builtin.BoxLayout{
+					children = {
+						builtin.ToggleButton{
+							meta = {
+								id = "imsvale_path_visualizer.button",
+								tooltip = _("Reserved train paths"),
+							},
+							value = on:old(),
+							onValueChange = function(value)
+								on:set(value)
+								overlay.setOn(value == 1)
+							end,
+							content = builtin.ImageView{
+								path = "imsvale_path_visualizer::/gui/path.tga",
+								scaling = builtin.type.ImageViewScaling.AutoFit,
+							},
+						},
 					},
 				},
 			},
