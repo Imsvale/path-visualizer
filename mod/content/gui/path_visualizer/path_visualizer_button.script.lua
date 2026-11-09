@@ -132,22 +132,25 @@ local Button = react.RegisterPluginRecipe(main_mod_button_area.MainModButtonArea
 		return false
 	end)
 
-	return builtin.BoxLayout{
+	-- a Component, not a bare BoxLayout: a layout takes no margin
+	return builtin.Component{
 		meta = { class = "imsvale-pathvis-button-area" },
-		children = {
-			builtin.ToggleButton{
-				meta = {
-					id = "imsvale_path_visualizer.button",
-					tooltip = _("Reserved train paths"),
-				},
-				value = on:old(),
-				onValueChange = function(value)
-					on:set(value)
-					overlay.setOn(value == 1)
-				end,
-				content = builtin.ImageView{
-					path = "imsvale_path_visualizer::/gui/path.tga",
-					scaling = builtin.type.ImageViewScaling.AutoFit,
+		layout = builtin.BoxLayout{
+			children = {
+				builtin.ToggleButton{
+					meta = {
+						id = "imsvale_path_visualizer.button",
+						tooltip = _("Reserved train paths"),
+					},
+					value = on:old(),
+					onValueChange = function(value)
+						on:set(value)
+						overlay.setOn(value == 1)
+					end,
+					content = builtin.ImageView{
+						path = "imsvale_path_visualizer::/gui/path.tga",
+						scaling = builtin.type.ImageViewScaling.AutoFit,
+					},
 				},
 			},
 		},
