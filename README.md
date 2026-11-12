@@ -34,6 +34,10 @@ The overlay is drawn through the game's tool overlay (`builtin.ActionDescriptor`
 
 Safe to add and remove at any time. Nothing is stored in your save.
 
+### Changelog
+
+[See what's changed](https://github.com/Imsvale/path-visualizer/blob/main/CHANGELOG.md).
+
 ### Contact
 * GitHub: https://github.com/Imsvale/path-visualizer/
 * Reddit: [u/Imsvale](https://www.reddit.com/user/Imsvale)

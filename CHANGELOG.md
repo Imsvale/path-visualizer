@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.4 (revision 5), 2026-11-12
+
+- Fixed overlay being enabled on startup.
+
 ## 1.0.3 (revision 4), 2026-11-01
 
 - Added thin, red line visual for path not clear after currently reserved segment.
