@@ -143,7 +143,7 @@ local Button = react.RegisterPluginRecipe(main_mod_button_area.MainModButtonArea
 						builtin.ToggleButton{
 							meta = {
 								id = "imsvale_path_visualizer.button",
-								tooltip = _("Reserved train paths"),
+								tooltip = _("Train Path Visualizer"),
 							},
 							value = on:old(),
 							onValueChange = function(value)

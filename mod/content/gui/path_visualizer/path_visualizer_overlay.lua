@@ -81,7 +81,7 @@ local LOG_INFO = dev.logInfo == true -- one-off information lines (errors are al
 
 local state = {
 	-- settings, per session: the HUD button (path_visualizer_button.script.lua) and its popover
-	on = true,
+	on = false,
 	braking = true,
 	emergency = false,
 
